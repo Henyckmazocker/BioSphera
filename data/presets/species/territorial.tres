@@ -1,0 +1,21 @@
+[gd_resource type="Resource" script_class="SpeciesPreset" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://data/species_preset.gd" id="1_species"]
+
+[resource]
+script = ExtResource("1_species")
+id = &"territorial"
+display_name = "Territorial"
+description = "Defensora de su tierra: territorialidad muy alta, lealtad y valentía altas, agresividad moderada. No busca pelea, pero domina y defiende su territorio con firmeza."
+trait_means = {
+&"aggression": 0.55,
+&"sociability": 0.5,
+&"loyalty": 0.65,
+&"bravery": 0.6,
+&"reproductive_appetite": 0.5,
+&"selectivity": 0.55,
+&"territoriality": 0.9
+}
+species_mods = {
+&"territoriality": 1.3
+}

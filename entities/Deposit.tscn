@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://entities/Deposit.gd" id="1_deposit_script"]
+
+[node name="Deposit" type="Node3D"]
+script = ExtResource("1_deposit_script")

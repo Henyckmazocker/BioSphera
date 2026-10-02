@@ -1,0 +1,16 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://entities/Corpse.gd" id="1_corpse_script"]
+
+[sub_resource type="SphereMesh" id="SphereMesh_corpse"]
+radius = 0.35
+height = 0.7
+radial_segments = 12
+rings = 6
+
+[node name="Corpse" type="Node3D" groups=["plants", "corpses", "food"]]
+script = ExtResource("1_corpse_script")
+
+[node name="Mesh" type="MeshInstance3D" parent="."]
+mesh = SubResource("SphereMesh_corpse")
+cast_shadow = 0

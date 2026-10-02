@@ -1,0 +1,16 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://world/CameraRig.gd" id="1_camerarig_script"]
+
+[node name="CameraRig" type="Node3D"]
+script = ExtResource("1_camerarig_script")
+
+[node name="Yaw" type="Node3D" parent="."]
+
+[node name="Pitch" type="Node3D" parent="Yaw"]
+
+[node name="Camera3D" type="Camera3D" parent="Yaw/Pitch"]
+current = true
+fov = 60.0
+near = 0.1
+far = 500.0

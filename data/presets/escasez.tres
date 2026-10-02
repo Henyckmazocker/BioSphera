@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="SimPreset" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://data/sim_preset.gd" id="1_preset"]
+
+[resource]
+script = ExtResource("1_preset")
+id = &"escasez"
+display_name = "Escasez"
+description = "Comida limitada y de regeneración lenta. La competencia por el alimento se dispara: territorios, peleas y selección dura."
+world_size = 100.0
+initial_plants = 60
+initial_population_per_species = 40
+min_plant_seeds = 15
+food_respawn_per_second = 2.0
+target_food = 50

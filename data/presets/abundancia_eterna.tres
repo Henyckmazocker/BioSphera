@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="SimPreset" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://data/sim_preset.gd" id="1_preset"]
+
+[resource]
+script = ExtResource("1_preset")
+id = &"abundancia_eterna"
+display_name = "Abundancia eterna"
+description = "Recursos casi infinitos. Nadie pasa hambre: ¿qué surge cuando la supervivencia está resuelta? Sociedad, ocio reproductivo y explosión demográfica."
+world_size = 80.0
+initial_plants = 600
+initial_population_per_species = 60
+min_plant_seeds = 250
+food_respawn_per_second = 20.0
+target_food = 500

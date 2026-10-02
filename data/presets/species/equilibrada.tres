@@ -1,0 +1,19 @@
+[gd_resource type="Resource" script_class="SpeciesPreset" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://data/species_preset.gd" id="1_species"]
+
+[resource]
+script = ExtResource("1_species")
+id = &"equilibrada"
+display_name = "Equilibrada"
+description = "Punto de partida neutro: todas las medias a 0.5 y modificadores a ×1.0. Sin sesgos; la divergencia surge sola por mutación y selección."
+trait_means = {
+&"aggression": 0.5,
+&"sociability": 0.5,
+&"loyalty": 0.5,
+&"bravery": 0.5,
+&"reproductive_appetite": 0.5,
+&"selectivity": 0.5,
+&"territoriality": 0.5
+}
+species_mods = {}

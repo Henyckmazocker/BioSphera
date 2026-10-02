@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="SimPreset" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://data/sim_preset.gd" id="1_preset"]
+
+[resource]
+script = ExtResource("1_preset")
+id = &"genesis"
+display_name = "Génesis"
+description = "Caja de Petri: una población pequeña y homogénea con comida abundante y sin presión. El punto de partida más limpio para observar la evolución desde cero."
+world_size = 60.0
+initial_plants = 250
+initial_population_per_species = 5
+min_plant_seeds = 120
+biome_seed = 1
+food_respawn_per_second = 10.0
+target_food = 250
+mutation_base_rate = 0.03

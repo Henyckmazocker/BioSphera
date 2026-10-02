@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://entities/Plant.gd" id="1_plant_script"]
+
+[node name="Plant" type="Node3D" groups=["plants", "food"]]
+script = ExtResource("1_plant_script")

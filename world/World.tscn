@@ -1,0 +1,73 @@
+[gd_scene load_steps=9 format=3]
+
+[ext_resource type="Script" path="res://world/World.gd" id="1_world_script"]
+[ext_resource type="PackedScene" path="res://world/CameraRig.tscn" id="2_camera_rig"]
+[ext_resource type="Script" path="res://world/Spawner.gd" id="3_spawner_script"]
+
+[sub_resource type="NavigationMesh" id="NavigationMesh_nav"]
+agent_radius = 0.6
+agent_height = 1.5
+agent_max_climb = 5.0
+agent_max_slope = 89.0
+cell_size = 0.25
+cell_height = 0.25
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_floor"]
+size = Vector2(60, 60)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_floor"]
+albedo_color = Color(0.94, 0.93, 0.9, 1)
+roughness = 0.95
+metallic = 0.0
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sky"]
+sky_top_color = Color(0.62, 0.72, 0.85, 1)
+sky_horizon_color = Color(0.92, 0.92, 0.9, 1)
+ground_bottom_color = Color(0.85, 0.85, 0.83, 1)
+ground_horizon_color = Color(0.9, 0.9, 0.88, 1)
+
+[sub_resource type="Sky" id="Sky_sky"]
+sky_material = SubResource("ProceduralSkyMaterial_sky")
+
+[sub_resource type="Environment" id="Environment_env"]
+background_mode = 2
+sky = SubResource("Sky_sky")
+ambient_light_source = 3
+ambient_light_color = Color(1, 1, 1, 1)
+ambient_light_sky_contribution = 0.7
+tonemap_mode = 2
+
+[node name="World" type="Node3D"]
+script = ExtResource("1_world_script")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_env")
+
+[node name="SunLight" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.866025, -0.353553, 0.353553, 0, 0.707107, 0.707107, -0.5, -0.612372, 0.612372, 0, 30, 0)
+light_energy = 1.2
+shadow_enabled = true
+
+[node name="Ground" type="MeshInstance3D" parent="."]
+mesh = SubResource("PlaneMesh_floor")
+surface_material_override/0 = SubResource("StandardMaterial3D_floor")
+
+[node name="NavigationRegion3D" type="NavigationRegion3D" parent="."]
+navigation_mesh = SubResource("NavigationMesh_nav")
+
+[node name="Spheres" type="Node3D" parent="."]
+
+[node name="Plants" type="Node3D" parent="."]
+
+[node name="CameraRig" parent="." instance=ExtResource("2_camera_rig")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
+
+[node name="Spawner" type="Node3D" parent="."]
+script = ExtResource("3_spawner_script")
+initial_population_per_species = 50
+initial_plants = 200
+min_plant_seeds = 40
+seed_rescue_interval = 8.0
+world_bounds = Vector2(60, 60)
+spheres_parent_path = NodePath("../Spheres")
+plants_parent_path = NodePath("../Plants")

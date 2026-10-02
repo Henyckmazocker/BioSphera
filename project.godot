@@ -1,0 +1,52 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
+
+config_version=5
+
+[application]
+
+config/name="BioSphera"
+run/main_scene="res://ui/StartScreen.tscn"
+config/features=PackedStringArray("4.6", "Forward Plus")
+config/icon="res://icon.svg"
+
+[autoload]
+
+SimConfig="*res://systems/SimConfig.gd"
+SimulationClock="*res://systems/SimulationClock.gd"
+EventLog="*res://systems/EventLogSystem.gd"
+GlobalParams="*res://systems/GlobalParams.gd"
+SpatialIndex="*res://systems/SpatialIndexSystem.gd"
+TerritorySystem="*res://systems/TerritorySystem.gd"
+Genetics="*res://systems/GeneticsSystem.gd"
+Relationships="*res://systems/RelationshipSystem.gd"
+Climate="*res://systems/ClimateSystem.gd"
+Selection="*res://systems/SelectionSystem.gd"
+Groups="*res://systems/GroupSystem.gd"
+Biomes="*res://systems/BiomeSystem.gd"
+Stats="*res://systems/StatsSystem.gd"
+PlayerControl="*res://systems/PlayerControlSystem.gd"
+
+[display]
+
+window/size/viewport_width=1920
+window/size/viewport_height=1080
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+
+[dotnet]
+
+project/assembly_name="BioSphera"
+
+[physics]
+
+3d/physics_engine="Jolt Physics"
+
+[rendering]
+
+rendering_device/driver.windows="d3d12"

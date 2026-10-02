@@ -1,0 +1,14 @@
+# Godot 4+ specific ignores
+.godot/
+/android/
+
+# Symlinks locales a la documentación personal (Brain vault)
+/AGENTS.md
+/docs
+
+
+# Caché de Python de las herramientas (tools/*.py)
+__pycache__/
+
+# Configuración local de Claude Code (permisos y rutas personales)
+/.claude/settings.local.json

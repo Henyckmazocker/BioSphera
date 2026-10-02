@@ -1,0 +1,22 @@
+[gd_resource type="Resource" script_class="SpeciesPreset" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://data/species_preset.gd" id="1_species"]
+
+[resource]
+script = ExtResource("1_species")
+id = &"pacifica"
+display_name = "Pacífica"
+description = "Sociable y cohesionada: poca agresividad y arrojo, mucha sociabilidad y lealtad. Evita el conflicto y forma grupos estables; prospera donde no hay que pelear por la comida."
+trait_means = {
+&"aggression": 0.2,
+&"sociability": 0.7,
+&"loyalty": 0.7,
+&"bravery": 0.35,
+&"reproductive_appetite": 0.55,
+&"selectivity": 0.5,
+&"territoriality": 0.3
+}
+species_mods = {
+&"aggression": 0.8,
+&"sociability": 1.2
+}

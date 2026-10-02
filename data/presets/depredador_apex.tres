@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="SimPreset" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://data/sim_preset.gd" id="1_preset"]
+
+[resource]
+script = ExtResource("1_preset")
+id = &"depredador_apex"
+display_name = "Depredador apex"
+description = "Un gigante voraz entre muchas presas pequeñas. Sin plantas para todos, la depredación marca el ritmo (los cadáveres alimentan). ¿Sobrevive el monstruo o lo derriban en grupo?"
+world_size = 90.0
+initial_plants = 150
+initial_population_per_species = 40
+min_plant_seeds = 50
+apex_enabled = true
+apex_size = 3.0
+apex_species = &"A"
+population_size_max = 1.2

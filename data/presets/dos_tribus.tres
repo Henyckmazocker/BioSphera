@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="SimPreset" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://data/sim_preset.gd" id="1_preset"]
+
+[resource]
+script = ExtResource("1_preset")
+id = &"dos_tribus"
+display_name = "Dos tribus"
+description = "Dos especies arrancan en lados opuestos del mundo, muy territoriales. El conflicto por la frontera y los recursos del centro es inevitable."
+world_size = 120.0
+initial_plants = 200
+initial_population_per_species = 35
+min_plant_seeds = 60
+biome_seed = 7
+spawn_split = true

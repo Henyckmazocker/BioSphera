@@ -1,0 +1,355 @@
+
+[gd_scene load_steps=5 format=3]
+
+
+[ext_resource type="Script" path="res://ui/Hud.gd" id="1_hud_script"]
+[ext_resource type="Script" path="res://ui/InspectPanel.gd" id="2_inspect_script"]
+[ext_resource type="Script" path="res://ui/ParamsPanel.gd" id="3_params_script"]
+[ext_resource type="Script" path="res://ui/HelpPanel.gd" id="4_help_script"]
+
+[node name="Hud" type="CanvasLayer"]
+script = ExtResource("1_hud_script")
+
+[node name="Root" type="Control" parent="."]
+anchor_right = 1.0
+anchor_bottom = 1.0
+mouse_filter = 2
+
+[node name="TopBar" type="PanelContainer" parent="Root"]
+anchor_right = 1.0
+offset_bottom = 36.0
+mouse_filter = 2
+
+[node name="HBox" type="HBoxContainer" parent="Root/TopBar"]
+offset_left = 12.0
+offset_top = 6.0
+offset_right = -12.0
+offset_bottom = -6.0
+
+[node name="SpeedLabel" type="Label" parent="Root/TopBar/HBox"]
+unique_name_in_owner = true
+text = "▶ x1.0"
+
+[node name="Spacer1" type="Control" parent="Root/TopBar/HBox"]
+custom_minimum_size = Vector2(24, 0)
+
+[node name="TickLabel" type="Label" parent="Root/TopBar/HBox"]
+unique_name_in_owner = true
+text = "tick 0"
+
+[node name="Spacer2" type="Control" parent="Root/TopBar/HBox"]
+custom_minimum_size = Vector2(24, 0)
+
+[node name="PopulationLabel" type="Label" parent="Root/TopBar/HBox"]
+unique_name_in_owner = true
+text = "👥 0"
+
+[node name="Spacer3" type="Control" parent="Root/TopBar/HBox"]
+custom_minimum_size = Vector2(24, 0)
+
+[node name="PlantLabel" type="Label" parent="Root/TopBar/HBox"]
+unique_name_in_owner = true
+text = "🌱 0"
+
+[node name="Spacer4" type="Control" parent="Root/TopBar/HBox"]
+custom_minimum_size = Vector2(24, 0)
+
+[node name="GenerationLabel" type="Label" parent="Root/TopBar/HBox"]
+unique_name_in_owner = true
+text = "gen 1"
+
+[node name="Spacer5" type="Control" parent="Root/TopBar/HBox"]
+custom_minimum_size = Vector2(36, 0)
+
+[node name="ExperimentationLabel" type="Label" parent="Root/TopBar/HBox"]
+unique_name_in_owner = true
+text = ""
+
+[node name="Spacer6" type="Control" parent="Root/TopBar/HBox"]
+custom_minimum_size = Vector2(24, 0)
+
+[node name="NavMeshButton" type="Button" parent="Root/TopBar/HBox"]
+unique_name_in_owner = true
+toggle_mode = true
+text = "NavMesh (N)"
+tooltip_text = "Mostrar/ocultar el navmesh sobre el terreno (N)"
+
+[node name="TerritoryButton" type="Button" parent="Root/TopBar/HBox"]
+unique_name_in_owner = true
+toggle_mode = true
+text = "Territorio (O)"
+tooltip_text = "Mapa de dominancia territorial: apagado → especie → grupo (O)"
+
+[node name="Spacer7" type="Control" parent="Root/TopBar/HBox"]
+custom_minimum_size = Vector2(24, 0)
+
+[node name="ControlButton" type="Button" parent="Root/TopBar/HBox"]
+unique_name_in_owner = true
+text = "Tomar control"
+tooltip_text = "Controlar en 3ª persona la esfera seleccionada (o el líder del grupo marcado)"
+
+[node name="ControlLabel" type="Label" parent="Root/TopBar/HBox"]
+unique_name_in_owner = true
+text = ""
+modulate = Color(0.95, 0.85, 0.5, 1)
+
+ [node name="ParamsPanel" type="PanelContainer" parent="Root"]
+ script = ExtResource("3_params_script")
+unique_name_in_owner = true
+visible = false
+anchor_left = 1.0
+anchor_top = 0.0
+anchor_right = 1.0
+offset_left = -340.0
+offset_top = 48.0
+offset_right = -12.0
+offset_bottom = 420.0
+grow_horizontal = 0
+mouse_filter = 0
+
+[node name="Margin" type="MarginContainer" parent="Root/ParamsPanel"]
+theme_override_constants/margin_left = 12
+theme_override_constants/margin_top = 12
+theme_override_constants/margin_right = 12
+theme_override_constants/margin_bottom = 12
+
+[node name="VBox" type="VBoxContainer" parent="Root/ParamsPanel/Margin"]
+
+[node name="Title" type="Label" parent="Root/ParamsPanel/Margin/VBox"]
+text = "Parámetros globales (en vivo)"
+
+[node name="Mutation" type="HBoxContainer" parent="Root/ParamsPanel/Margin/VBox"]
+
+[node name="Label" type="Label" parent="Root/ParamsPanel/Margin/VBox/Mutation"]
+text = "Mutación base"
+custom_minimum_size = Vector2(160, 0)
+
+[node name="MutationSlider" type="HSlider" parent="Root/ParamsPanel/Margin/VBox/Mutation"]
+unique_name_in_owner = true
+min_value = 0.0
+max_value = 0.5
+step = 0.005
+value = 0.06
+size_flags_horizontal = 3
+
+[node name="MutationValue" type="Label" parent="Root/ParamsPanel/Margin/VBox/Mutation"]
+unique_name_in_owner = true
+text = "0.06"
+custom_minimum_size = Vector2(60, 0)
+
+[node name="Aggression" type="HBoxContainer" parent="Root/ParamsPanel/Margin/VBox"]
+
+[node name="Label" type="Label" parent="Root/ParamsPanel/Margin/VBox/Aggression"]
+text = "Agresividad ×"
+custom_minimum_size = Vector2(160, 0)
+
+[node name="AggressionSlider" type="HSlider" parent="Root/ParamsPanel/Margin/VBox/Aggression"]
+unique_name_in_owner = true
+min_value = 0.0
+max_value = 3.0
+step = 0.05
+value = 1.0
+size_flags_horizontal = 3
+
+[node name="AggressionValue" type="Label" parent="Root/ParamsPanel/Margin/VBox/Aggression"]
+unique_name_in_owner = true
+text = "×1.00"
+custom_minimum_size = Vector2(60, 0)
+
+[node name="Sociability" type="HBoxContainer" parent="Root/ParamsPanel/Margin/VBox"]
+
+[node name="Label" type="Label" parent="Root/ParamsPanel/Margin/VBox/Sociability"]
+text = "Sociabilidad ×"
+custom_minimum_size = Vector2(160, 0)
+
+[node name="SociabilitySlider" type="HSlider" parent="Root/ParamsPanel/Margin/VBox/Sociability"]
+unique_name_in_owner = true
+min_value = 0.0
+max_value = 3.0
+step = 0.05
+value = 1.0
+size_flags_horizontal = 3
+
+[node name="SociabilityValue" type="Label" parent="Root/ParamsPanel/Margin/VBox/Sociability"]
+unique_name_in_owner = true
+text = "×1.00"
+custom_minimum_size = Vector2(60, 0)
+
+[node name="Lifespan" type="HBoxContainer" parent="Root/ParamsPanel/Margin/VBox"]
+
+[node name="Label" type="Label" parent="Root/ParamsPanel/Margin/VBox/Lifespan"]
+text = "Longevidad ×"
+custom_minimum_size = Vector2(160, 0)
+
+[node name="LifespanSlider" type="HSlider" parent="Root/ParamsPanel/Margin/VBox/Lifespan"]
+unique_name_in_owner = true
+min_value = 0.2
+max_value = 3.0
+step = 0.05
+value = 1.0
+size_flags_horizontal = 3
+
+[node name="LifespanValue" type="Label" parent="Root/ParamsPanel/Margin/VBox/Lifespan"]
+unique_name_in_owner = true
+text = "×1.00"
+custom_minimum_size = Vector2(60, 0)
+
+[node name="Repro" type="HBoxContainer" parent="Root/ParamsPanel/Margin/VBox"]
+
+[node name="Label" type="Label" parent="Root/ParamsPanel/Margin/VBox/Repro"]
+text = "Apetito repro ×"
+custom_minimum_size = Vector2(160, 0)
+
+[node name="ReproSlider" type="HSlider" parent="Root/ParamsPanel/Margin/VBox/Repro"]
+unique_name_in_owner = true
+min_value = 0.0
+max_value = 3.0
+step = 0.05
+value = 1.0
+size_flags_horizontal = 3
+
+[node name="ReproValue" type="Label" parent="Root/ParamsPanel/Margin/VBox/Repro"]
+unique_name_in_owner = true
+text = "×1.00"
+custom_minimum_size = Vector2(60, 0)
+
+[node name="Territoriality" type="HBoxContainer" parent="Root/ParamsPanel/Margin/VBox"]
+
+[node name="Label" type="Label" parent="Root/ParamsPanel/Margin/VBox/Territoriality"]
+text = "Territorialidad ×"
+custom_minimum_size = Vector2(160, 0)
+
+[node name="TerritorialitySlider" type="HSlider" parent="Root/ParamsPanel/Margin/VBox/Territoriality"]
+unique_name_in_owner = true
+min_value = 0.0
+max_value = 3.0
+step = 0.05
+value = 1.0
+size_flags_horizontal = 3
+
+[node name="TerritorialityValue" type="Label" parent="Root/ParamsPanel/Margin/VBox/Territoriality"]
+unique_name_in_owner = true
+text = "×1.00"
+custom_minimum_size = Vector2(60, 0)
+
+[node name="Memory" type="HBoxContainer" parent="Root/ParamsPanel/Margin/VBox"]
+
+[node name="Label" type="Label" parent="Root/ParamsPanel/Margin/VBox/Memory"]
+text = "Memoria social"
+custom_minimum_size = Vector2(160, 0)
+
+[node name="MemorySlider" type="HSlider" parent="Root/ParamsPanel/Margin/VBox/Memory"]
+unique_name_in_owner = true
+min_value = 2
+max_value = 64
+step = 1
+value = 12
+size_flags_horizontal = 3
+
+[node name="MemoryValue" type="Label" parent="Root/ParamsPanel/Margin/VBox/Memory"]
+unique_name_in_owner = true
+text = "12"
+custom_minimum_size = Vector2(60, 0)
+
+ [node name="HelpPanel" type="PanelContainer" parent="Root"]
+ script = ExtResource("4_help_script")
+unique_name_in_owner = true
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 12.0
+offset_top = -360.0
+offset_right = 340.0
+offset_bottom = -60.0
+mouse_filter = 2
+
+[node name="HelpMargin" type="MarginContainer" parent="Root/HelpPanel"]
+theme_override_constants/margin_left = 10
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_right = 10
+theme_override_constants/margin_bottom = 8
+
+[node name="HelpVBox" type="VBoxContainer" parent="Root/HelpPanel/HelpMargin"]
+
+[node name="HelpTitle" type="Label" parent="Root/HelpPanel/HelpMargin/HelpVBox"]
+text = "⌨ Controles  (K: ocultar)"
+modulate = Color(1, 1, 1, 0.85)
+
+[node name="HelpSeparator" type="HSeparator" parent="Root/HelpPanel/HelpMargin/HelpVBox"]
+
+[node name="HelpLabel" type="Label" parent="Root/HelpPanel/HelpMargin/HelpVBox"]
+unique_name_in_owner = true
+text = "Espacio    pausa
+1·2·3·4·5  velocidad x1 / x2 / x4 / x8 / x16
+P          panel de parámetros globales
+S          panel de modificadores por especie
+T          panel de estadísticas
+E          modo experimentación (dios)
+H          ocultar / mostrar toda la UI
+K          ocultar / mostrar esta ayuda
+N          navmesh (debug)
+O          territorio (especie / grupo)
+
+Click izq  seleccionar esfera
+F          enfocar selección
+WASD       paneo cámara
+Click med  paneo arrastrando
+Click der  orbitar
+Rueda      zoom
+R          reset cámara
+
+Modo control (botón 'Tomar control'):
+WASD mover · ratón mirar · Shift correr
+Clic atacar · E interactuar · Esc salir"
+modulate = Color(1, 1, 1, 0.85)
+
+[node name="InspectPanel" type="PanelContainer" parent="Root"]
+unique_name_in_owner = true
+script = ExtResource("2_inspect_script")
+visible = false
+anchor_top = 0.0
+offset_left = 12.0
+offset_top = 48.0
+offset_right = 360.0
+offset_bottom = 300.0
+mouse_filter = 0
+
+[node name="Margin" type="MarginContainer" parent="Root/InspectPanel"]
+theme_override_constants/margin_left = 12
+theme_override_constants/margin_top = 12
+theme_override_constants/margin_right = 12
+theme_override_constants/margin_bottom = 12
+
+[node name="VBox" type="VBoxContainer" parent="Root/InspectPanel/Margin"]
+
+[node name="InspectName" type="Label" parent="Root/InspectPanel/Margin/VBox"]
+unique_name_in_owner = true
+text = "—"
+
+[node name="InspectSpecies" type="Label" parent="Root/InspectPanel/Margin/VBox"]
+unique_name_in_owner = true
+text = ""
+modulate = Color(0.8, 0.8, 0.8, 1)
+
+[node name="Sep1" type="HSeparator" parent="Root/InspectPanel/Margin/VBox"]
+
+[node name="InspectState" type="Label" parent="Root/InspectPanel/Margin/VBox"]
+unique_name_in_owner = true
+text = ""
+
+[node name="InspectAction" type="Label" parent="Root/InspectPanel/Margin/VBox"]
+unique_name_in_owner = true
+text = ""
+modulate = Color(0.9, 0.7, 0.4, 1)
+
+[node name="Sep2" type="HSeparator" parent="Root/InspectPanel/Margin/VBox"]
+
+[node name="InspectTraits" type="Label" parent="Root/InspectPanel/Margin/VBox"]
+unique_name_in_owner = true
+text = ""
+autowrap_mode = 2
+
+[node name="Sep3" type="HSeparator" parent="Root/InspectPanel/Margin/VBox"]
+
+[node name="InspectSocial" type="Label" parent="Root/InspectPanel/Margin/VBox"]
+unique_name_in_owner = true
+text = ""
