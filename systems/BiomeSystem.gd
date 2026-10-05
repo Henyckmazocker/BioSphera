@@ -24,18 +24,63 @@ const BIOME_COLOR: Dictionary = {
 	Biome.COLD:   Color(0.85, 0.90, 0.95),   # blanco azulado
 }
 
+## Paleta del terreno por estación (0=primavera 1=verano 2=otoño 3=invierno, como
+## `Climate.season_index`). Primavera ES `BIOME_COLOR`: hasta el primer cambio de estación
+## el terreno se ve igual que antes. La aplica `World` con `shaders/terrain.gdshader`;
+## los colores van crudos, como el COLOR horneado (ver el shader). Sutil, estilo Mini Metro:
+## verano algo más cálido y saturado, otoño con bosque ocre y llanura pajiza, invierno
+## blanqueado y frío con el agua más gris.
+## Ver docs: plan «Game Feel y Efectos Juicy», M5.
+const SEASON_BIOME_COLOR: Array = [
+	BIOME_COLOR,
+	{   # verano
+		Biome.PLAIN:  Color(0.80, 0.85, 0.45),
+		Biome.FOREST: Color(0.26, 0.50, 0.21),
+		Biome.DESERT: Color(0.95, 0.81, 0.47),
+		Biome.WATER:  Color(0.33, 0.61, 0.87),
+		Biome.COLD:   Color(0.86, 0.90, 0.93),
+	},
+	{   # otoño
+		Biome.PLAIN:  Color(0.86, 0.80, 0.52),
+		Biome.FOREST: Color(0.66, 0.50, 0.24),
+		Biome.DESERT: Color(0.90, 0.77, 0.52),
+		Biome.WATER:  Color(0.36, 0.56, 0.74),
+		Biome.COLD:   Color(0.84, 0.86, 0.88),
+	},
+	{   # invierno
+		Biome.PLAIN:  Color(0.80, 0.86, 0.82),
+		Biome.FOREST: Color(0.48, 0.58, 0.55),
+		Biome.DESERT: Color(0.86, 0.82, 0.73),
+		Biome.WATER:  Color(0.50, 0.60, 0.68),
+		Biome.COLD:   Color(0.94, 0.96, 0.99),
+	},
+]
+
+## Tinte que multiplica la luz del sol por estación (mismo índice). Muy suave (±10–15 %):
+## primavera neutra, verano cálido, otoño dorado, invierno frío.
+const SEASON_LIGHT_TINT: Array[Color] = [
+	Color(1.0, 1.0, 1.0),
+	Color(1.0, 0.96, 0.88),
+	Color(1.0, 0.91, 0.80),
+	Color(0.87, 0.93, 1.0),
+]
+
 ## Modificadores por bioma. Multiplican el rasgo correspondiente.
 ## metabolism_mod: multiplica la quema de energía por tick.
 ## vision_mod: multiplica el rango de visión efectivo.
 ## speed_mod: multiplica la velocidad de movimiento.
 ## plant_growth_mod: multiplica la tasa de crecimiento de plantas.
+## mutation_mod: hostilidad 0..1 del bioma de nacimiento para la mutación (la pesa
+##   GlobalParams.mutation_biome_factor). Columna propia, no derivada de plant_growth_mod,
+##   para tunearla sin acoplarla al crecimiento vegetal. Debe estar en TODOS los biomas:
+##   get_mod devuelve 1.0 si falta la clave.
 ## walkable: si false, las esferas no pueden entrar (barrera).
 const BIOME_EFFECTS: Dictionary = {
-	Biome.PLAIN:  {"metabolism_mod": 1.0, "vision_mod": 1.0, "speed_mod": 1.0, "plant_growth_mod": 1.0, "walkable": true},
-	Biome.FOREST: {"metabolism_mod": 0.9, "vision_mod": 0.6, "speed_mod": 0.9, "plant_growth_mod": 1.3, "walkable": true},
-	Biome.DESERT: {"metabolism_mod": 1.5, "vision_mod": 1.1, "speed_mod": 1.0, "plant_growth_mod": 0.3, "walkable": true},
-	Biome.WATER:  {"metabolism_mod": 1.0, "vision_mod": 1.0, "speed_mod": 0.0, "plant_growth_mod": 0.0, "walkable": false},
-	Biome.COLD:   {"metabolism_mod": 0.7, "vision_mod": 0.9, "speed_mod": 0.7, "plant_growth_mod": 0.6, "walkable": true},
+	Biome.PLAIN:  {"metabolism_mod": 1.0, "vision_mod": 1.0, "speed_mod": 1.0, "plant_growth_mod": 1.0, "mutation_mod": 0.0, "walkable": true},
+	Biome.FOREST: {"metabolism_mod": 0.9, "vision_mod": 0.6, "speed_mod": 0.9, "plant_growth_mod": 1.3, "mutation_mod": 0.0, "walkable": true},
+	Biome.DESERT: {"metabolism_mod": 1.5, "vision_mod": 1.1, "speed_mod": 1.0, "plant_growth_mod": 0.3, "mutation_mod": 1.0, "walkable": true},
+	Biome.WATER:  {"metabolism_mod": 1.0, "vision_mod": 1.0, "speed_mod": 0.0, "plant_growth_mod": 0.0, "mutation_mod": 0.0, "walkable": false},
+	Biome.COLD:   {"metabolism_mod": 0.7, "vision_mod": 0.9, "speed_mod": 0.7, "plant_growth_mod": 0.6, "mutation_mod": 0.7, "walkable": true},
 }
 
 # Tamaño de bioma RELATIVO al mapa: nº de periodos de ruido a lo ancho del mundo.

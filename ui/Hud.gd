@@ -14,6 +14,7 @@ extends CanvasLayer
 @onready var _plant_label: Label = %PlantLabel
 @onready var _gen_label: Label = %GenerationLabel
 @onready var _exp_label: Label = %ExperimentationLabel
+@onready var _event_label: Label = %EventLabel
 @onready var _params_panel: PanelContainer = %ParamsPanel
 @onready var _help_panel: PanelContainer = %HelpPanel
 @onready var _mutation_slider: HSlider = %MutationSlider
@@ -30,21 +31,30 @@ extends CanvasLayer
 @onready var _repro_value: Label = %ReproValue
 @onready var _territoriality_value: Label = %TerritorialityValue
 @onready var _memory_value: Label = %MemoryValue
+@onready var _effects_option: OptionButton = %EffectsOption
+@onready var _halo_option: OptionButton = %HaloOption
 @onready var _navmesh_button: Button = %NavMeshButton
 @onready var _territory_button: Button = %TerritoryButton
-@onready var _control_button: Button = %ControlButton
-@onready var _control_label: Label = %ControlLabel
+@onready var _save_button: Button = %SaveButton
+@onready var _save_notice: Label = %SaveNoticeLabel
+
+## Segundos que el aviso de guardado queda a la vista antes de desvanecerse.
+const SAVE_NOTICE_HOLD_S: float = 2.0
+const SAVE_NOTICE_FADE_S: float = 0.5
 
 const SpeciesPanelScript: GDScript = preload("res://ui/SpeciesPanel.gd")
 const StatsPanelScript: GDScript = preload("res://ui/StatsPanel.gd")
 const GroupChartPanelScript: GDScript = preload("res://ui/GroupChartPanel.gd")
 const GroupInspectPanelScript: GDScript = preload("res://ui/GroupInspectPanel.gd")
+const EventsPanelScript: GDScript = preload("res://ui/EventsPanel.gd")
 var _species_panel: PanelContainer
 var _stats_panel: PanelContainer
 var _group_chart_panel: PanelContainer
 var _group_inspect_panel: PanelContainer
+var _events_panel: PanelContainer
 
 var _ui_visible: bool = true
+var _save_notice_tween: Tween = null
 
 
 func _ready() -> void:
@@ -78,17 +88,19 @@ func _ready() -> void:
 
 	_refresh_experimentation_label()
 
+	# Sección «Visual»: preferencias del jugador (UserSettings, ya cargadas por World).
+	# Son gusto, no simulación: no se bloquean fuera del modo experimentación. Los ids
+	# de los ítems son los valores de los enums.
+	_effects_option.select(_effects_option.get_item_index(UserSettings.effects_intensity))
+	_halo_option.select(_halo_option.get_item_index(UserSettings.halo_mode))
+	_effects_option.item_selected.connect(func(idx: int) -> void:
+		UserSettings.set_effects_intensity(_effects_option.get_item_id(idx)))
+	_halo_option.item_selected.connect(func(idx: int) -> void:
+		UserSettings.set_halo_mode(_halo_option.get_item_id(idx)))
+
 	_navmesh_button.toggled.connect(_on_navmesh_toggled)
 	_territory_button.toggled.connect(_on_territory_toggled)
-
-	# Botón de "Modo control" (3ª persona). Su etiqueta/acción dependen de la
-	# selección actual y de si ya se está controlando una esfera.
-	_control_button.pressed.connect(_on_control_button_pressed)
-	Selection.selected_changed.connect(_on_control_state_changed)
-	Selection.group_highlight_changed.connect(_on_control_state_changed)
-	PlayerControl.control_started.connect(_on_control_state_changed)
-	PlayerControl.control_ended.connect(_on_control_state_changed)
-	_refresh_control_ui()
+	_save_button.pressed.connect(_save_manual)
 
 	_species_panel = SpeciesPanelScript.new()
 	_species_panel.visible = false
@@ -150,6 +162,21 @@ func _ready() -> void:
 	_group_inspect_panel.grow_vertical = Control.GROW_DIRECTION_END
 	_root.add_child(_group_inspect_panel)
 
+	# Panel de eventos del entorno (V): arriba a la izquierda, a la derecha del de
+	# estadísticas para que se puedan tener los dos abiertos.
+	_events_panel = EventsPanelScript.new()
+	_events_panel.visible = false
+	_events_panel.anchor_left = 0.0
+	_events_panel.anchor_right = 0.0
+	_events_panel.anchor_top = 0.0
+	_events_panel.anchor_bottom = 0.0
+	_events_panel.offset_left = 384.0
+	_events_panel.offset_top = 60.0
+	_events_panel.offset_right = 724.0
+	_events_panel.offset_bottom = 420.0
+	_root.add_child(_events_panel)
+	_event_label.visible = false
+
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
@@ -180,12 +207,13 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_T:
 				if _stats_panel != null:
 					_stats_panel.visible = not _stats_panel.visible
+			KEY_V:
+				# Eventos del entorno: no exige modo experimentación.
+				if _events_panel != null:
+					_events_panel.visible = not _events_panel.visible
 			KEY_E:
-				# En modo control E es "interactuar" (lo maneja PlayerController); no
-				# togglear experimentación a la vez.
-				if not PlayerControl.is_active():
-					GlobalParams.experimentation_mode = not GlobalParams.experimentation_mode
-					_refresh_experimentation_label()
+				GlobalParams.experimentation_mode = not GlobalParams.experimentation_mode
+				_refresh_experimentation_label()
 			KEY_N:
 				# Toggle del visualizador del navmesh (debug). El botón y la
 				# tecla quedan sincronizados gracias a `set_pressed_no_signal`.
@@ -198,6 +226,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				var w: World = _find_world()
 				if w != null:
 					_refresh_territory_button(w.cycle_territory_overlay())
+			KEY_F5:
+				# Guardado manual. No Ctrl+S: aquí se comparan keycodes sin
+				# modificadores (S = panel de especies) y la cámara usa S y Ctrl.
+				_save_manual()
 
 
 func _on_speed_changed(speed: float) -> void:
@@ -220,9 +252,23 @@ func _on_tick(_dt: float) -> void:
 		if s is Sphere and s.generation > max_gen:
 			max_gen = s.generation
 	_gen_label.text = "gen %d" % max_gen
+	_refresh_event_label()
 
 	_repro_value.text = "×%s" % String.num(GlobalParams.reproductive_appetite_modifier, 2)
 	_memory_value.text = "%d" % GlobalParams.social_memory_capacity
+
+## Aviso permanente de los eventos del entorno activos («🌵 Sequía 60% · 4 d»),
+## separados por tres espacios; oculto si no hay ninguno.
+func _refresh_event_label() -> void:
+	var events: Array[Dictionary] = Climate.active_events()
+	_event_label.visible = not events.is_empty()
+	if events.is_empty():
+		return
+	var parts: PackedStringArray = PackedStringArray()
+	for e in events:
+		parts.append(EventsPanelScript.format_event(e))
+	_event_label.text = "   ".join(parts)
+
 
 func _update_slider_labels() -> void:
 	_mutation_value.text = String.num(GlobalParams.mutation_base_rate, 2)
@@ -266,50 +312,35 @@ func _refresh_territory_button(state: int) -> void:
 			_territory_button.text = "Territorio (O)"
 
 
+## Guarda en la ranura manual y muestra el aviso (o el error). Funciona también en
+## modo control: la esfera controlada se guarda como IA (ver `Sphere.to_save`).
+func _save_manual() -> void:
+	var world: World = _find_world()
+	var err: Error = world.save_game(SaveGame.SLOT_MANUAL) if world != null else ERR_UNAVAILABLE
+	if err == OK:
+		_show_save_notice("💾 Partida guardada", Color(0.75, 1.0, 0.75, 1.0))
+	elif err == ERR_UNAVAILABLE:
+		_show_save_notice("Aún no se puede guardar: el mundo se está generando", Color(1.0, 0.8, 0.5, 1.0))
+	else:
+		_show_save_notice("⚠ No se pudo guardar (%s)" % error_string(err), Color(1.0, 0.5, 0.45, 1.0))
+
+
+## Muestra `text` en el aviso del HUD y lo desvanece a los `SAVE_NOTICE_HOLD_S` s.
+func _show_save_notice(text: String, color: Color) -> void:
+	if _save_notice_tween != null and _save_notice_tween.is_valid():
+		_save_notice_tween.kill()
+	_save_notice.text = text
+	_save_notice.modulate = color
+	_save_notice.visible = true
+	_save_notice_tween = create_tween()
+	_save_notice_tween.tween_interval(SAVE_NOTICE_HOLD_S)
+	_save_notice_tween.tween_property(_save_notice, "modulate:a", 0.0, SAVE_NOTICE_FADE_S)
+	_save_notice_tween.tween_callback(_save_notice.hide)
+
+
 ## Localiza la escena `World` actual sin acoplarse a una ruta concreta.
 func _find_world() -> World:
 	var arr: Array = get_tree().get_nodes_in_group(&"world")
 	if arr.is_empty():
 		return null
 	return arr[0] as World
-
-
-# ---------------- MODO CONTROL ----------------
-
-## Acción del botón de control según el estado: salir si ya se controla; si no,
-## tomar control de la esfera seleccionada o, en su defecto, del líder del grupo
-## marcado. Ver `PlayerControl`.
-func _on_control_button_pressed() -> void:
-	if PlayerControl.is_active():
-		PlayerControl.release()
-		return
-	if Selection.current != null and is_instance_valid(Selection.current):
-		PlayerControl.take_control(Selection.current)
-	elif Selection.highlighted_group_id != -1 and Groups.has_group(Selection.highlighted_group_id):
-		PlayerControl.take_control(Groups.leader_of(Selection.highlighted_group_id))
-
-
-## Refresca el botón/etiqueta al cambiar selección, grupo marcado o estado de control.
-## Firma con argumento opcional para servir a las cuatro señales conectadas
-## (selected_changed/group_highlight_changed pasan 1 arg; control_ended pasa 0).
-func _on_control_state_changed(_arg = null) -> void:
-	_refresh_control_ui()
-
-
-func _refresh_control_ui() -> void:
-	if PlayerControl.is_active():
-		_control_button.text = "Salir de control"
-		_control_button.disabled = false
-		_control_label.text = "🎮 %s — WASD mover · Shift correr · Clic atacar · E interactuar · Esc salir" \
-			% PlayerControl.pawn.full_name()
-		return
-	_control_label.text = ""
-	if Selection.current != null and is_instance_valid(Selection.current):
-		_control_button.text = "Tomar control"
-		_control_button.disabled = false
-	elif Selection.highlighted_group_id != -1 and Groups.has_group(Selection.highlighted_group_id):
-		_control_button.text = "Controlar líder"
-		_control_button.disabled = false
-	else:
-		_control_button.text = "Tomar control"
-		_control_button.disabled = true

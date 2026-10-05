@@ -10,7 +10,7 @@ extends RefCounted
 ##   cambios. Aquí solo se decide cómo de grande se DIBUJA cada cosa, mapeando el
 ##   `size` a una banda de altura estrecha para evitar enanos/gigantes.
 ##
-## Jerarquía objetivo: planta/roca < entidad < granja (huella) < árbol.
+## Jerarquía objetivo: planta/roca < entidad < nido (huella) < granja (huella) < árbol.
 ## Para retocar tamaños tras verlos en marcha, tocar SOLO este archivo.
 
 const TraitsScript := preload("res://data/traits.gd")
@@ -40,6 +40,11 @@ const GOLD_HEIGHT: float = 0.6
 const FARM_FOOTPRINT: float = 3.0
 const FARM_NATIVE_FOOTPRINT: float = 1.78
 
+# Nido: domo bajo del clan, entre la entidad y la granja. Misma normalización por
+# huella nativa (diámetro de la base del .glb de `tools/blender_nest.py`).
+const NEST_FOOTPRINT: float = 2.0
+const NEST_NATIVE_FOOTPRINT: float = 2.0
+
 
 ## Altura visual (u de terreno) para un `size` de genoma dado. Lineal en la banda.
 static func entity_height(size: float) -> float:
@@ -60,3 +65,8 @@ static func entity_model_scale(size: float, native_height: float) -> float:
 ## Escala uniforme del .glb de la granja para alcanzar la huella objetivo.
 static func farm_scale() -> float:
 	return FARM_FOOTPRINT / FARM_NATIVE_FOOTPRINT
+
+
+## Escala uniforme del .glb del nido para alcanzar la huella objetivo.
+static func nest_scale() -> float:
+	return NEST_FOOTPRINT / NEST_NATIVE_FOOTPRINT

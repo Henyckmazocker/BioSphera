@@ -65,6 +65,13 @@ godot --headless tools/SmokeTest.tscn
 
 `tools/analyze_logs.py` analiza en detalle los logs JSONL de una sesión.
 
+## Privacidad
+
+Si la analítica está configurada en el entorno (`AUGUR_KEY`) y aceptas en la pantalla de consentimiento,
+el juego envía de forma anónima cómo evoluciona cada partida (población, nacimientos y muertes, combates,
+grupos, granjas y rasgos medios) a un servidor propio. Sin esa variable o si rechazas, no se envía ni se
+guarda nada. La decisión se cambia cuando quieras desde el botón «Privacidad» de la pantalla de inicio.
+
 ## Estructura
 
 ```

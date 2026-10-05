@@ -72,7 +72,10 @@ func _on_tick(dt_sim: float) -> void:
 		GlobalParams.tuning.farm_territory_radius,
 		GlobalParams.tuning.farm_territory_strength, dt_sim)
 	_timer += dt_sim
-	if _timer < GlobalParams.tuning.farm_spawn_interval:
+	# La sequía también frena la siembra: si no, las granjas (plantas ya maduras,
+	# sin polinizar) alimentan a todos y anulan el evento. Ver `Climate.food_supply_scale`.
+	var interval: float = GlobalParams.tuning.farm_spawn_interval / maxf(Climate.food_supply_scale(), 0.01)
+	if _timer < interval:
 		return
 	_timer = 0.0
 	# La densidad la gobierna el tope por celda de la rejilla (ver
@@ -133,6 +136,30 @@ func _build_visual() -> void:
 			_base_albedos.append(mat.albedo_color)
 
 
+# ---------------- GUARDADO ----------------
+# Ver `SaveGame` y `Sphere.to_save`. `group_id` se guarda tal cual (ver plan, M2).
+
+func to_save(_ids: Dictionary) -> Dictionary:
+	return {
+		"k": &"farm",
+		"pos": global_position,
+		"group_id": group_id,
+		"health": health,
+		"timer": _timer,
+	}
+
+
+## Restaura desde `to_save`. `_ready` ya fijó `health = farm_max_health`: la vida
+## guardada se sobrescribe DESPUÉS de `activate()`, y con ella el oscurecimiento.
+func from_save(d: Dictionary, _node_of: Array) -> void:
+	global_position = d.pos
+	group_id = int(d.group_id)
+	_timer = float(d.timer)
+	activate()
+	health = float(d.health)
+	_apply_damage_tint()
+
+
 # ---------------- DAÑO Y DESTRUCCIÓN ----------------
 
 ## Recibe daño de una unidad atacante (acción ATTACK_FARM de un grupo hostil). Al
@@ -141,11 +168,16 @@ func take_damage(amount: float, attacker: Sphere) -> void:
 	if amount <= 0.0 or health <= 0.0:
 		return
 	health -= amount
+	_apply_damage_tint()
+	if health <= 0.0:
+		_destroy(attacker)
+
+
+## Oscurece el modelo según la vida que le queda (feedback de daño).
+func _apply_damage_tint() -> void:
 	var t: float = clampf(health / maxf(GlobalParams.tuning.farm_max_health, 0.001), 0.0, 1.0)
 	for i in _materials.size():
 		_materials[i].albedo_color = _base_albedos[i].darkened((1.0 - t) * DAMAGE_DARKEN)
-	if health <= 0.0:
-		_destroy(attacker)
 
 
 ## Arrasa la granja: loguea el evento y se elimina. La influencia territorial que

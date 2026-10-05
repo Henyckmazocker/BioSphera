@@ -179,6 +179,18 @@ func cycle_speed(direction: int = 1) -> void:
 	set_speed(SPEEDS[next_index])
 
 
+## Restaura el reloj desde un guardado (ver `SaveGame.restore`). Va ANTES de activar
+## las entidades: `Sphere.activate` lee `get_tick_count()` para `_interp_tick`, y la
+## franja de tick de cada esfera depende de `_tick_count % SPHERE_STRIDE` frente a su
+## posición en `_entities`. Restaurar el contador conserva la fase de toda la población.
+## La velocidad pasa por el setter para avisar a la UI (`speed_changed`).
+func restore_state(tick_count: int, new_speed: float, accumulator: float) -> void:
+	assert(not _ticking, "restore_state dentro del tick")
+	_tick_count = tick_count
+	speed = new_speed
+	_tick_accumulator = accumulator
+
+
 func get_tick_count() -> int:
 	return _tick_count
 

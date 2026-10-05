@@ -2,7 +2,7 @@ class_name GroupInspectPanel
 extends "res://ui/DraggablePanel.gd"
 ## Ventana flotante con la información del grupo seleccionado en el gráfico de
 ## grupos (clic en una barra). Espejo de `InspectPanel` pero a nivel de grupo:
-## líder, recursos de la bolsa común, poder, unidades con arma y nº de granjas.
+## líder, recursos de la bolsa común, poder, unidades con arma, nº de granjas y nido.
 ##
 ## Se muestra cuando `Selection.highlighted_group_id != -1` (lo fija el clic en
 ## `GroupChartPanel`) y se oculta al deseleccionar o si el grupo se disuelve.
@@ -78,12 +78,14 @@ func _refresh() -> void:
 		+ "unidades: %d · con arma: %d\n"
 		+ "objetivo: %s · cohesión: %.0f\n"
 		+ "poder: %.2f · granjas: %d\n"
+		+ "%s\n"
 		+ "bolsa — 🪵 %d · 🪨 %d · 🟡 %d"
 	) % [
 		info["leader"],
 		int(info["size"]), int(info["armed"]),
 		_goal_name(int(info["goal"])), float(info["cohesion"]),
 		float(info["power"]), int(info["farms"]),
+		_nest_line(int(info.get("nest_day", -1))),
 		int(info["wood"]), int(info["stone"]), int(info["gold"]),
 	]
 	# Línea de guerra solo si el grupo tiene un objetivo enemigo activo.
@@ -91,6 +93,14 @@ func _refresh() -> void:
 	if war_target != "":
 		var modo: String = "⚔ a muerte (líder)" if bool(info.get("war_leader", false)) else "invadir"
 		_body.text += "\n%s → %s" % [modo, war_target]
+
+
+## `nest_day` llega en base 0 (`Climate.day_index`); se muestra en base 1, como el
+## día de las ranuras de guardado en StartScreen.
+func _nest_line(nest_day: int) -> String:
+	if nest_day < 0:
+		return "Nido: nómada"
+	return "Nido: desde el día %d" % (nest_day + 1)
 
 
 func _goal_name(goal: int) -> String:

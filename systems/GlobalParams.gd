@@ -19,6 +19,10 @@ var mutation_base_rate: float = 0.06     # σ base sobre rasgos normalizados [0.
 var mutation_stress_factor: float = 0.6
 var mutation_inbreeding_factor: float = 0.5
 var mutation_age_factor: float = 0.4
+# Factores ambientales: pesan la presión climática (Climate.mutation_pressure, 0..1)
+# y la hostilidad del bioma de nacimiento ("mutation_mod" de BIOME_EFFECTS, 0..1).
+var mutation_climate_factor: float = 0.4
+var mutation_biome_factor: float = 0.5
 
 # Modificadores globales de comportamiento (multiplicadores)
 var aggression_modifier: float = 1.0
@@ -33,6 +37,11 @@ var target_food: int = 200
 # Reglas sociales
 var social_memory_capacity: int = 12
 var lifespan_multiplier: float = 1.0
+
+# Eventos del entorno: media de eventos aleatorios por año (0 = ninguno). La fija el
+# preset (`SimConfig.apply_to_global_params`) y la cambia en vivo el panel de eventos.
+# Qué eventos y con qué intensidad lo decide el preset (`SimConfig.random_event_pool_paths`).
+var random_events_per_year: float = 0.0
 
 # Modo experimentación (god mode)
 var experimentation_mode: bool = false
@@ -96,5 +105,6 @@ func set_param(key: StringName, value: float) -> void:
 		&"target_food": target_food = int(value)
 		&"social_memory_capacity": social_memory_capacity = int(value)
 		&"lifespan_multiplier": lifespan_multiplier = value
+		&"random_events_per_year": random_events_per_year = value
 		_: return
 	changed.emit(key, value)

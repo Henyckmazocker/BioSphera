@@ -93,6 +93,29 @@ func _transition_to(new_stage: Stage) -> void:
 	})
 
 
+# ---------------- GUARDADO ----------------
+# Ver `SaveGame` y `Sphere.to_save`.
+
+func to_save(_ids: Dictionary) -> Dictionary:
+	return {
+		"k": &"tree",
+		"pos": global_position,
+		"stage": stage,
+		"age": age,
+		"wood_left": wood_left,
+	}
+
+
+## Restaura desde `to_save`. `activate()` rellena `wood_left = MAX_WOOD` si el árbol
+## está maduro: el valor guardado se sobrescribe DESPUÉS (árbol a medio talar).
+func from_save(d: Dictionary, _node_of: Array) -> void:
+	global_position = d.pos
+	stage = int(d.stage) as Stage
+	age = float(d.age)
+	activate()
+	wood_left = int(d.wood_left)
+
+
 static func _stage_name(s: Stage) -> String:
 	match s:
 		Stage.GROWING: return "growing"

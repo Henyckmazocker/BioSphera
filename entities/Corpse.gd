@@ -45,6 +45,27 @@ func activate() -> void:
 		_mesh.scale = Vector3.ONE * 0.7
 
 
+## Foto del cadáver para el save (ver `SaveGame` y `Sphere.to_save`).
+func to_save(_ids: Dictionary) -> Dictionary:
+	return {
+		"k": &"corpse",
+		"pos": global_position,
+		"bites_left": bites_left,
+		"age": age,
+		"color": color,
+	}
+
+
+## Restaura desde `to_save`. Sustituye a `Corpse.spawn` en la carga: `color` va ANTES
+## de `activate()`, que lo usa para el material; `activate()` no pisa nada guardado.
+func from_save(d: Dictionary, _node_of: Array) -> void:
+	global_position = d.pos
+	color = d.color
+	bites_left = int(d.bites_left)
+	age = float(d.age)
+	activate()
+
+
 func _exit_tree() -> void:
 	SimulationClock.unregister_entity(self)
 	SpatialIndex.unregister_plant(self)

@@ -112,7 +112,9 @@ func register_visit() -> void:
 func _on_tick(dt_sim: float) -> void:
 	var biome_growth: float = Biomes.get_mod(Biomes.biome_at(global_position), "plant_growth_mod")
 	var season_mod: float = Climate.plant_growth_modifier()
-	age += dt_sim * biome_growth * season_mod
+	# Los eventos del entorno (sequía) aceleran solo la marchitez de las maduras.
+	var wilt_mod: float = Climate.plant_wilt_modifier() if stage == Stage.MATURE else 1.0
+	age += dt_sim * biome_growth * season_mod * wilt_mod
 	match stage:
 		Stage.SEED, Stage.GROWING:
 			if age >= GROW_TIME:
@@ -124,9 +126,11 @@ func _on_tick(dt_sim: float) -> void:
 			for n in neighbors:
 				if n != self and n is Plant and n.stage == Stage.MATURE:
 					mature_count += 1
-			pollination += NEIGHBOR_RATE * mature_count * dt_sim * season_mod
+			# Estación compuesta con los eventos del entorno (ver `Climate`).
+			var pollination_mod: float = Climate.pollination_modifier()
+			pollination += NEIGHBOR_RATE * mature_count * dt_sim * pollination_mod
 			if visited_this_tick:
-				pollination += VISIT_BOOST * dt_sim * season_mod
+				pollination += VISIT_BOOST * dt_sim * pollination_mod
 				visited_this_tick = false
 			if pollination >= SEED_THRESHOLD:
 				pollination = 0.0
@@ -162,6 +166,38 @@ static func _stage_name(s: Stage) -> String:
 		Stage.MATURE: return "mature"
 		Stage.WILTED: return "wilted"
 		_: return "unknown"
+
+
+# ---------------- GUARDADO ----------------
+# Ver `SaveGame` y `Sphere.to_save`. El orden de registro en `SimulationClock._slow` lo
+# reproduce `SaveGame.restore` llamando a `from_save` en el orden guardado.
+
+## Foto de esta planta para el save. `_counted` no se guarda: lo pone `activate()`, que
+## también la vuelve a sumar a `TerritorySystem._plant_counts`.
+func to_save(_ids: Dictionary) -> Dictionary:
+	return {
+		"k": &"plant",
+		"pos": global_position,
+		"stage": stage,
+		"age": age,
+		"pollination": pollination,
+		"bites_left": bites_left,
+		"owner_group_id": owner_group_id,
+		"theft_charged": theft_charged,
+	}
+
+
+## Restaura desde `to_save`. Precondición: ya en el árbol y con `world_bounds` fijado.
+## `activate()` no pisa ningún campo guardado, así que va al final sin sobrescrituras.
+func from_save(d: Dictionary, _node_of: Array) -> void:
+	global_position = d.pos
+	stage = int(d.stage) as Stage
+	age = float(d.age)
+	pollination = float(d.pollination)
+	bites_left = int(d.bites_left)
+	owner_group_id = int(d.owner_group_id)
+	theft_charged = bool(d.theft_charged)
+	activate()
 
 
 func _try_spawn_seed() -> void:

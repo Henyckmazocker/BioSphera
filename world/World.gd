@@ -97,24 +97,64 @@ var _territory_overlay: TerritoryOverlay = null
 ## Por defecto false: conservador hasta validar (full check de ruta).
 var navmesh_connected: bool = false
 
+## Autoguardado cada `AUTOSAVE_INTERVAL_S` segundos reales en la ranura `auto`, solo si
+## la sim avanzó desde el anterior. Ver docs: plan «Guardado y Carga de Escenarios».
+const AUTOSAVE_INTERVAL_S: float = 300.0
+## `_tick_count` del último autoguardado (-1 = ninguno aún).
+var _last_autosave_tick: int = -1
+var _autosave_timer: Timer = null
+@onready var _spawner: Spawner = $Spawner
+
+## --- Estación: paleta del terreno y tinte de luz (plan «Game Feel y Efectos Juicy», M5) ---
+## Duración real del fundido al cambiar de estación (instantáneo con efectos en OFF).
+const SEASON_FADE_S: float = 3.0
+## Material del terreno (`shaders/terrain.gdshader`); null si el suelo no pasó por SurfaceTool.
+var _terrain_mat: ShaderMaterial = null
+## Estación cuya paleta es el destino actual (-1 = ninguna aplicada aún).
+var _season_shown: int = -1
+var _season_tween: Tween = null
+var _season_blend: float = 1.0
+var _palette_from: PackedColorArray = PackedColorArray()
+var _palette_to: PackedColorArray = PackedColorArray()
+var _tint_from: Color = Color.WHITE
+var _tint_to: Color = Color.WHITE
+## Color del sol que calcula el ciclo día/noche, antes del tinte de estación: el tinte se
+## multiplica sobre él cada vez, así no se acumula.
+var _sun_base_color: Color = SUN_DAY
+
 
 func _ready() -> void:
 	add_to_group("world")
+	# Preferencias visuales del jugador (idempotente: si ya se cargaron en StartScreen,
+	# no hace nada). Antes de crear el EffectsDirector, que lee el nivel en su _ready.
+	UserSettings.load_settings()
+	# Timer creado aquí y no al cerrar: dentro de WM_CLOSE_REQUEST no se añaden nodos.
+	# PROCESS_MODE_ALWAYS para que corra aunque algo pause el árbol (tiempo real).
+	_autosave_timer = Timer.new()
+	_autosave_timer.name = "AutosaveTimer"
+	_autosave_timer.wait_time = AUTOSAVE_INTERVAL_S
+	_autosave_timer.process_mode = Node.PROCESS_MODE_ALWAYS
+	_autosave_timer.autostart = SimConfig.autosave_enabled
+	_autosave_timer.timeout.connect(_on_autosave_timeout)
+	add_child(_autosave_timer)
 	world_bounds = Vector2(SimConfig.world_size, SimConfig.world_size)
 	_apply_configured_world_size()
 	_setup_environment()
 	Climate.day_advanced.connect(_on_day_advanced)
+	Climate.season_changed.connect(_on_season_changed)
+	# `Climate.from_save` no emite `season_changed`: tras cargar se aplica la estación del save.
+	_spawner.save_restored.connect(_on_save_restored)
 	# Renderizador por lotes (MultiMesh) de cuerpos de esferas y plantas: una
 	# draw call por tipo en lugar de una por individuo. Hijo de World para
 	# compartir el espacio 3D y morir con la escena. Se crea ANTES de spawnear
 	# (el Spawner espera a `terrain_ready` + nav, varios frames después).
 	add_child(EntityRenderer.new())
-	# Traductor de input del "modo control" (3ª persona). Solo actúa cuando
-	# `PlayerControl` está activo; en observador es inerte. Hijo de World para
-	# morir con la escena, igual que el renderizador.
-	var player_controller := PlayerController.new()
-	player_controller.name = "PlayerController"
-	add_child(player_controller)
+	# Despachador de efectos visuales: solo con pantalla, para que las herramientas
+	# headless (SmokeTest, save_load_test, measure_run) no lo vean. Ver EffectsDirector.
+	if DisplayServer.get_name() != "headless":
+		var effects := EffectsDirector.new()
+		effects.name = "EffectsDirector"
+		add_child(effects)
 	_generate_biomes()
 	# Capa de líneas de relación al inspeccionar (3.5 — visualización social).
 	# Vive como hijo del World para que esté en el mismo espacio 3D que las
@@ -128,11 +168,43 @@ func _ready() -> void:
 	var highlight_node := GroupHighlight.new()
 	highlight_node.name = "GroupHighlight"
 	add_child(highlight_node)
+	# Nidos de los grupos asentados: un domo por nido, reconciliado con
+	# `Groups.get_nests()`. Hijo de World, mismo patrón que GroupHighlight.
+	var nest_layer := NestLayer.new()
+	nest_layer.name = "NestLayer"
+	add_child(nest_layer)
 	# Overlay de dominancia territorial (debug, toggle con tecla O). Mismo patrón
 	# que RelationLines/GroupHighlight: hijo de World, redibujo por frame.
 	_territory_overlay = TerritoryOverlay.new()
 	_territory_overlay.name = "TerritoryOverlay"
 	add_child(_territory_overlay)
+
+
+## Guarda la partida en `slot` (ver `SaveGame.save_now`, que emite `game_saved`).
+## Síncrono y fuera del tick: lo llaman input (F5/botón del HUD), el Timer y el cierre de
+## ventana, que nunca llegan dentro de `SimulationClock._run_one_tick`. Devuelve
+## `ERR_UNAVAILABLE` si el mundo aún no está sembrado o restaurado.
+func save_game(slot: String) -> Error:
+	if _spawner == null or not _spawner.populated:
+		return ERR_UNAVAILABLE
+	return SaveGame.save_now(_spawner, slot)
+
+
+func _on_autosave_timeout() -> void:
+	var tick: int = SimulationClock.get_tick_count()
+	if tick == _last_autosave_tick:
+		return  # en pausa desde el último: nada nuevo que guardar
+	if save_game(SaveGame.SLOT_AUTO) == OK:
+		_last_autosave_tick = tick
+
+
+## Al cerrar la ventana: autoguardado síncrono, sin añadir nodos. Convive con el cierre
+## de Augur (`addons/augur/augur.gd`), que recibe la notificación antes (los autoloads
+## van delante de la escena en el árbol) y retiene el quit hasta su subida final; sin
+## sesión, `auto_accept_quit` sale al acabar el frame, y este guardado ya ha terminado.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST and SimConfig.autosave_enabled:
+		save_game(SaveGame.SLOT_AUTO)
 
 
 ## Tope de subdivisiones del terreno. Hasta este tamaño se mantiene ~1
@@ -162,18 +234,6 @@ func _generate_biomes() -> void:
 	if _ground == null:
 		return
 
-	# --- Material con vertex colors ---
-	var mat: StandardMaterial3D = _ground.get_surface_override_material(0)
-	if mat == null:
-		mat = StandardMaterial3D.new()
-		_ground.set_surface_override_material(0, mat)
-	else:
-		mat = mat.duplicate()
-		_ground.set_surface_override_material(0, mat)
-	mat.albedo_texture = null
-	mat.albedo_color = Color.WHITE
-	mat.vertex_color_use_as_albedo = true
-
 	# --- Deformar mesh según bioma + relieve y construir rejilla de alturas ---
 	var plane_mesh := _ground.mesh
 	var mesh: ArrayMesh = null
@@ -196,6 +256,8 @@ func _generate_biomes() -> void:
 		var arr_mesh: ArrayMesh = ArrayMesh.new()
 		var st: SurfaceTool = SurfaceTool.new()
 		st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		# Pesos de bioma por vértice para la paleta de estación (shaders/terrain.gdshader).
+		st.set_custom_format(0, SurfaceTool.CUSTOM_RGBA_FLOAT)
 
 		for z in range(depth):
 			var row: Array = []
@@ -237,7 +299,10 @@ func _generate_biomes() -> void:
 				c = c.lerp(Biomes.BIOME_COLOR[Biomes.Biome.DESERT],  desert_w * dry_w)
 				c = c.lerp(Biomes.BIOME_COLOR[Biomes.Biome.COLD],    cold_w * dry_w)
 				c = c.lerp(Biomes.BIOME_COLOR[Biomes.Biome.WATER],   water_w)
+				# El COLOR horneado se mantiene como respaldo; el shader usa los pesos
+				# (mismo encadenado) con la paleta de la estación.
 				st.set_color(c)
+				st.set_custom(0, Color(forest_w, desert_w * dry_w, cold_w * dry_w, water_w))
 				st.set_uv(Vector2(float(x) / float(width - 1), float(z) / float(depth - 1)))
 				st.add_vertex(Vector3(fx, y, fz))
 			_height_grid.append(row)
@@ -252,13 +317,24 @@ func _generate_biomes() -> void:
 		st.generate_normals()
 		mesh = st.commit()
 		_ground.mesh = mesh
+		_terrain_mat = ShaderMaterial.new()
+		_terrain_mat.shader = preload("res://shaders/terrain.gdshader")
+		_ground.set_surface_override_material(0, _terrain_mat)
+		# Sin fundido: la estación vigente (en una carga, `_on_save_restored` la corrige).
+		_apply_season_instant(Climate.season_index)
 		# Bake walkability a la misma resolución que la malla:
 		# is_walkable_at usará exactamente los mismos puntos que los vértices visibles.
 		Biomes.bake_walkability_grid(width, depth)
 		# Lámina de agua estilizada sobre las depresiones del bioma de agua.
 		_build_water_surface(width, depth, size, elev_scale)
 	elif plane_mesh is ArrayMesh:
+		# Malla ya horneada (sin pesos en CUSTOM0): color por vértice, sin paleta de estación.
 		mesh = plane_mesh
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = Color.WHITE
+		mat.roughness = 0.95
+		mat.vertex_color_use_as_albedo = true
+		_ground.set_surface_override_material(0, mat)
 
 	# --- Collider físico ---
 	if mesh != null:
@@ -654,8 +730,9 @@ func _on_day_advanced(day_progress: float) -> void:
 	var daylight: float = smoothstep(-0.25, 0.15, elevation)
 	var golden: float = clampf(1.0 - absf(elevation) * 3.0, 0.0, 1.0)
 
-	# El color del sol vira a dorado cerca del horizonte.
-	_sun.light_color = SUN_DAY.lerp(SUN_GOLDEN, golden)
+	# El color del sol vira a dorado cerca del horizonte; encima, el tinte de estación.
+	_sun_base_color = SUN_DAY.lerp(SUN_GOLDEN, golden)
+	_apply_sun_color()
 
 	# Atenuar la ambiental de noche es lo que de verdad oscurece la escena: el
 	# cielo procedural es estático y, sin esto, rellenaría la noche con luz diurna.
@@ -674,6 +751,76 @@ func _on_day_advanced(day_progress: float) -> void:
 	# con la atenuación de la ambiental y del cielo.
 	if _water_mat != null:
 		_water_mat.set_shader_parameter("daylight", daylight)
+
+
+## Cambio de estación: funde paleta del terreno y tinte de luz desde lo que se ve ahora
+## (aunque haya un fundido a medias) hasta la nueva, en `SEASON_FADE_S` reales. Con los
+## efectos en OFF el cambio es instantáneo, pero ocurre: es apariencia del mundo.
+func _on_season_changed(season: int) -> void:
+	if season == _season_shown:
+		return
+	if UserSettings.effects_intensity == UserSettings.EffectsIntensity.OFF:
+		_apply_season_instant(season)
+		return
+	var shown: PackedColorArray = PackedColorArray()
+	for i in _palette_to.size():
+		shown.append(_palette_from[i].lerp(_palette_to[i], _season_blend))
+	_tint_from = _tint_from.lerp(_tint_to, _season_blend)
+	_palette_from = shown
+	_palette_to = _season_palette(season)
+	_tint_to = BiomeSystem.SEASON_LIGHT_TINT[season]
+	_season_shown = season
+	if _terrain_mat != null:
+		_terrain_mat.set_shader_parameter("palette_from", _palette_from)
+		_terrain_mat.set_shader_parameter("palette_to", _palette_to)
+	_set_season_blend(0.0)
+	if _season_tween != null:
+		_season_tween.kill()
+	_season_tween = create_tween()
+	_season_tween.tween_method(_set_season_blend, 0.0, 1.0, SEASON_FADE_S)
+
+
+## Pone la estación sin fundido. Al generar el terreno y tras cargar una partida, porque
+## `Climate.from_save` restaura `season_index` sin emitir `season_changed`.
+func _apply_season_instant(season: int) -> void:
+	if _season_tween != null:
+		_season_tween.kill()
+		_season_tween = null
+	_palette_to = _season_palette(season)
+	_palette_from = _palette_to
+	_tint_to = BiomeSystem.SEASON_LIGHT_TINT[season]
+	_tint_from = _tint_to
+	_season_shown = season
+	if _terrain_mat != null:
+		_terrain_mat.set_shader_parameter("palette_from", _palette_from)
+		_terrain_mat.set_shader_parameter("palette_to", _palette_to)
+	_set_season_blend(1.0)
+
+
+func _on_save_restored(_node_of: Array) -> void:
+	_apply_season_instant(Climate.season_index)
+
+
+func _set_season_blend(v: float) -> void:
+	_season_blend = v
+	if _terrain_mat != null:
+		_terrain_mat.set_shader_parameter("blend", v)
+	_apply_sun_color()
+
+
+## Color del sol = el del ciclo día/noche × el tinte de estación (mezclado con `blend`).
+func _apply_sun_color() -> void:
+	if _sun != null:
+		_sun.light_color = _sun_base_color * _tint_from.lerp(_tint_to, _season_blend)
+
+
+## Paleta de una estación en el orden del enum `Biome` (el que indexa el shader).
+func _season_palette(season: int) -> PackedColorArray:
+	var src: Dictionary = BiomeSystem.SEASON_BIOME_COLOR[season]
+	var out: PackedColorArray = PackedColorArray()
+	for b in BiomeSystem.Biome.size():
+		out.append(src[b])
+	return out
 
 
 ## Altura Y del terreno en (x, z) con interpolación bilineal sobre la rejilla.

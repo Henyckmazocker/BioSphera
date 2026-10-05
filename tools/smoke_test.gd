@@ -165,6 +165,11 @@ func _report_and_quit() -> void:
 	ok = _check("Población final",
 		"%.0f%% (%d/%d)" % [pop_pct, population, _initial_population],
 		pop_pct >= MIN_POPULATION_PCT, "≥ %.0f%%" % MIN_POPULATION_PCT) and ok
+	# Nidos huérfanos que no se desvanecen: el decay los borra a los `nest_decay_days`
+	# (más una reevaluación). Con margen de medio día, cualquiera más viejo es un fallo.
+	var orphans_unfaded: int = _count_orphans_unfaded()
+	ok = _check("Nidos huérfanos sin desvanecer",
+		"%d" % orphans_unfaded, orphans_unfaded == 0, "= 0, nest_orphans_unfaded") and ok
 
 	print("─".repeat(58))
 	var causes: Array = []
@@ -178,6 +183,20 @@ func _report_and_quit() -> void:
 	print("VEREDICTO: %s" % ("✅ PASS" if ok else "❌ FAIL"))
 	print("─".repeat(58))
 	get_tree().quit(0 if ok else 1)
+
+
+## Nidos huérfanos con más de `nest_decay_days + 0.5` días desde que quedaron huérfanos.
+func _count_orphans_unfaded() -> int:
+	var tuning: SimTuning = GlobalParams.tuning
+	var ticks_per_day: float = tuning.seconds_per_day * SimulationClock.TICKS_PER_SECOND
+	var limit: float = (tuning.nest_decay_days + 0.5) * ticks_per_day
+	var now: int = SimulationClock.get_tick_count()
+	var n: int = 0
+	for nid in Groups._nests:
+		var orphaned: int = int(Groups._nests[nid].orphaned_tick)
+		if orphaned >= 0 and float(now - orphaned) > limit:
+			n += 1
+	return n
 
 
 func _check(label: String, value: String, passed: bool, threshold: String) -> bool:

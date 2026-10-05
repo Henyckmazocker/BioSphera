@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="EnvironmentEvent" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://data/environment_event.gd" id="1_event"]
+
+[resource]
+script = ExtResource("1_event")
+kind = 2
+display_name = "Tormenta"
+intensity = 0.5
+duration_days = 10.0
+ramp_days = 2.0
+speed_mult = 0.8
+vision_mult = 0.4
+mutation_pressure = 0.1

@@ -7,6 +7,9 @@ extends Control
 ## Es la escena de arranque del juego (`run/main_scene` en project.godot).
 
 const SIMULATION_SCENE: String = "res://main/Main.tscn"
+## Pantalla de consentimiento de la analítica. Por `preload` y no por su
+## `class_name` para no depender de la caché de clases globales del editor.
+const CONSENT_SCREEN := preload("res://ui/ConsentScreen.gd")
 
 ## Definición de cada slider: clave SimConfig, etiqueta, rango y paso.
 # Los mínimos de plantas/población/comida son 0 para permitir el preset
@@ -27,6 +30,7 @@ const PRESET_PATHS: Array[String] = [
 	"res://data/presets/sandbox_vacio.tres",
 	"res://data/presets/dos_tribus.tres",
 	"res://data/presets/depredador_apex.tres",
+	"res://data/presets/mundo_en_colapso.tres",
 ]
 
 ## Arquetipos de especie (presets de comportamiento + modificadores). Se cargan en
@@ -67,15 +71,22 @@ var _presets: Array[SimPreset] = []
 # Preset elegido actualmente (null = "Personalizado").
 var _selected_preset: SimPreset = null
 var _preset_desc: Label
-# Casilla "empezar controlando una esfera nueva" (modo control en 3ª persona).
-var _control_check: CheckButton
+# Botones «Continuar» por ranura de `SaveGame`: slot(String) -> Button.
+var _continue_buttons: Dictionary = {}
+# Aviso cuando una ranura falla al leerse justo al pulsar «Continuar».
+var _load_error_dialog: AcceptDialog
 
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
+	UserSettings.load_settings()  # preferencias visuales; idempotente (también en World)
 	_load_presets()
 	_load_species_presets()
 	_build_ui()
+	# Primer arranque con `AUGUR_KEY` y sin decisión: la pantalla tapa el menú y no
+	# se cierra sin elegir. Sin clave `needs_consent_decision()` es false.
+	if Analytics.needs_consent_decision():
+		_open_consent_screen(CONSENT_SCREEN.MODE_FIRST_RUN)
 
 
 func _load_presets() -> void:
@@ -152,18 +163,58 @@ func _build_ui() -> void:
 
 	outer.add_child(HSeparator.new())
 
-	# Modo control: empezar poseyendo una esfera nueva (3ª persona). Ver
-	# `PlayerControl` y `Spawner._spawn_controlled_sphere`.
-	_control_check = CheckButton.new()
-	_control_check.text = "Empezar controlando una esfera nueva (3ª persona)"
-	_control_check.button_pressed = SimConfig.start_controlled
-	outer.add_child(_control_check)
+	# «Privacidad» solo existe con analítica configurada (`AUGUR_KEY`); sin clave
+	# ni se crea.
+	if Analytics.enabled:
+		var privacy_btn := Button.new()
+		privacy_btn.text = "Privacidad"
+		privacy_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
+		privacy_btn.pressed.connect(
+			func() -> void: _open_consent_screen(CONSENT_SCREEN.MODE_CHANGE, Analytics.has_consent()))
+		outer.add_child(privacy_btn)
+
+	# Fila de arranque: partida nueva y las dos ranuras de `SaveGame` (ver
+	# `_add_continue_button`). Cargar solo desde aquí, con el proceso recién abierto.
+	var start_row := HBoxContainer.new()
+	start_row.add_theme_constant_override("separation", 12)
+	outer.add_child(start_row)
 
 	var start_btn := Button.new()
 	start_btn.text = "Iniciar simulación"
 	start_btn.custom_minimum_size = Vector2(0.0, 46.0)
+	start_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	start_btn.pressed.connect(_on_start_pressed)
-	outer.add_child(start_btn)
+	start_row.add_child(start_btn)
+
+	for slot in [SaveGame.SLOT_MANUAL, SaveGame.SLOT_AUTO]:
+		_add_continue_button(start_row, slot)
+
+	_load_error_dialog = AcceptDialog.new()
+	_load_error_dialog.title = "No se pudo cargar"
+	add_child(_load_error_dialog)
+
+
+## Botón «Continuar · <ranura>» rellenado con `SaveGame.peek`: con día y año (desde 1,
+## como los ve el jugador) y la fecha del guardado. Si la ranura no existe o `read`
+## la rechaza (dañada, otra versión de esquema) queda deshabilitado y el tooltip
+## lleva el motivo.
+func _add_continue_button(parent: Control, slot: String) -> void:
+	var btn := Button.new()
+	btn.custom_minimum_size = Vector2(0.0, 46.0)
+	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var info: Dictionary = SaveGame.peek(slot)
+	if info.ok:
+		btn.text = "Continuar · %s (día %d, año %d · %s)" % [
+			slot, int(info.day_index) + 1, int(info.year) + 1,
+			String(info.saved_at).replace("T", " ").left(16)]
+		btn.tooltip_text = "Cargar la partida guardada en «%s»" % slot
+		btn.pressed.connect(_on_continue_pressed.bind(slot))
+	else:
+		btn.text = "Continuar · %s" % slot
+		btn.disabled = true
+		btn.tooltip_text = String(info.error)
+	parent.add_child(btn)
+	_continue_buttons[slot] = btn
 
 
 ## Columna izquierda: escenario (mundo) + sliders de mundo.
@@ -427,8 +478,6 @@ func _on_start_pressed() -> void:
 	SimConfig.initial_plants = int(_sliders["initial_plants"].value)
 	SimConfig.initial_population_per_species = int(_sliders["initial_population_per_species"].value)
 	SimConfig.min_plant_seeds = int(_sliders["min_plant_seeds"].value)
-	# Modo control: arrancar poseyendo una esfera nueva (3ª persona).
-	SimConfig.start_controlled = _control_check != null and _control_check.button_pressed
 	for species in _trait_sliders.keys():
 		for key in _trait_sliders[species].keys():
 			SimConfig.set_trait_mean(species, key, float(_trait_sliders[species][key].value))
@@ -437,4 +486,39 @@ func _on_start_pressed() -> void:
 	for species in _mod_sliders.keys():
 		for key in _mod_sliders[species].keys():
 			GlobalParams.set_species_mod(species, key, float(_mod_sliders[species][key].value))
+	# Nombre del escenario: va al save (`config`) y a la analítica.
+	SimConfig.preset_name = _selected_preset.display_name if _selected_preset != null else "Personalizado"
+	# Analítica: `run_start` con `SimConfig` ya escrito. Sin clave no hace nada.
+	Analytics.start_run(SimConfig.preset_name)
 	get_tree().change_scene_to_file(SIMULATION_SCENE)
+
+
+## Carga en frío de una ranura (ver `SaveGame`): config y parámetros del save ANTES de
+## cambiar de escena (`World`/`Spawner` leen `SimConfig` en su `_ready`), y el save
+## pendiente para que `Spawner` lo restaure en vez de spawnear la población inicial.
+## Se relee el fichero: pudo cambiar o romperse desde que se pintó el botón.
+func _on_continue_pressed(slot: String) -> void:
+	var r: Dictionary = SaveGame.read(slot)
+	if not r.ok:
+		_load_error_dialog.dialog_text = r.error
+		_load_error_dialog.popup_centered()
+		var btn: Button = _continue_buttons.get(slot)
+		if btn != null:
+			btn.disabled = true
+			btn.tooltip_text = r.error
+		return
+	SaveGame.apply_settings(r.data)
+	SimConfig.pending_save = r.data
+	# `Climate` aún no está restaurado (lo hace `SaveGame.restore` tras cambiar de
+	# escena): el día de `run_start` sale del save.
+	Analytics.start_run(SimConfig.preset_name, true, int(r.data.climate.get("day_index", 0)))
+	get_tree().change_scene_to_file(SIMULATION_SCENE)
+
+
+## Monta la pantalla de consentimiento encima del menú. La decisión la guarda
+## `Analytics` (que la delega en el SDK); la pantalla no toca la analítica.
+func _open_consent_screen(mode: String, current: bool = false) -> void:
+	var screen := CONSENT_SCREEN.new()
+	screen.initialize(mode, current)
+	screen.decided.connect(Analytics.set_consent)
+	add_child(screen)

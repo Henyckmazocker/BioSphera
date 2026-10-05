@@ -123,3 +123,46 @@ func reset() -> void:
 	history_t_sim.clear()
 	_sample_timer = 0.0
 	sample_taken.emit()
+
+
+# ---------------- GUARDADO ----------------
+# Ver `SaveGame`. Se restaura el ÚLTIMO: cada `activate()` de la carga loguea un
+# `spawn`, y si este sistema reaccionase a ellos (o a futuros eventos) contaminarían
+# los contadores; restaurar al final los deja exactamente como se guardaron.
+
+func to_save() -> Dictionary:
+	return {
+		"pop_A": pop_A,
+		"pop_B": pop_B,
+		"plants_count": plants_count,
+		"max_generation": max_generation,
+		"total_births": total_births,
+		"total_deaths": total_deaths,
+		"deaths_by_cause": deaths_by_cause.duplicate(),
+		"deaths_by_species": deaths_by_species.duplicate(),
+		"births_by_species": births_by_species.duplicate(),
+		"history_pop_A": history_pop_A.duplicate(),
+		"history_pop_B": history_pop_B.duplicate(),
+		"history_plants": history_plants.duplicate(),
+		"history_t_sim": history_t_sim.duplicate(),
+		"sample_timer": _sample_timer,
+	}
+
+
+func from_save(d: Dictionary) -> void:
+	pop_A = int(d.get("pop_A", 0))
+	pop_B = int(d.get("pop_B", 0))
+	plants_count = int(d.get("plants_count", 0))
+	max_generation = int(d.get("max_generation", 1))
+	total_births = int(d.get("total_births", 0))
+	total_deaths = int(d.get("total_deaths", 0))
+	deaths_by_cause = Dictionary(d.get("deaths_by_cause", {})).duplicate()
+	deaths_by_species = Dictionary(d.get("deaths_by_species", {})).duplicate()
+	births_by_species = Dictionary(d.get("births_by_species", {})).duplicate()
+	# `assign` y no `=`: las historias son arrays tipados.
+	history_pop_A.assign(d.get("history_pop_A", []))
+	history_pop_B.assign(d.get("history_pop_B", []))
+	history_plants.assign(d.get("history_plants", []))
+	history_t_sim.assign(d.get("history_t_sim", []))
+	_sample_timer = float(d.get("sample_timer", 0.0))
+	sample_taken.emit()

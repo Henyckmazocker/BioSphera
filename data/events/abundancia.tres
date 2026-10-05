@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="EnvironmentEvent" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://data/environment_event.gd" id="1_event"]
+
+[resource]
+script = ExtResource("1_event")
+kind = 3
+display_name = "Abundancia"
+intensity = 0.5
+duration_days = 10.0
+ramp_days = 2.0
+pollination_mult = 2.5
+mutation_pressure = 0.0

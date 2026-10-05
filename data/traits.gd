@@ -36,6 +36,17 @@ const BEHAVIOR_KEYS: Array[StringName] = [
 	&"industriousness",
 ]
 
+# Volatilidad intrínseca por rasgo: multiplica la σ efectiva de mutación en
+# `GeneticsSystem.cross`. Los físicos mutan con la σ completa (escalada a su
+# rango); los de comportamiento, a la mitad, para que la personalidad derive más
+# despacio que el cuerpo. Nació con los valores que antes estaban cableados.
+const TRAIT_VOLATILITY: Dictionary = {
+	"size": 1.0, "speed": 1.0, "vision": 1.0, "metabolism": 1.0, "longevity": 1.0,
+	"aggression": 0.5, "sociability": 0.5, "loyalty": 0.5, "bravery": 0.5,
+	"reproductive_appetite": 0.5, "selectivity": 0.5, "territoriality": 0.5,
+	"industriousness": 0.5,
+}
+
 # Diferenciación de las dos especies iniciales:
 # - forma distinta (A = esfera, B = pirámide triangular).
 # El color depende de la familia (lineage), no de la especie, de modo que

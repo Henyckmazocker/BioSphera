@@ -57,9 +57,6 @@ const SPHERE_CAP: int = 500
 const STRESS_FROM_HUNGER: float = 0.6
 const STRESS_FROM_COMBAT: float = 5.0
 const STRESS_DECAY: float = 0.3
-# Multiplicador de carrera del modo control (Shift mantenido): correr va más rápido
-# que el paso normal `_t_speed`.
-const PLAYER_SPRINT_MULT: float = 2.2
 
 # Modelos 3D por especie (humanoides animados). Sustituyen al cuerpo primitivo
 # (esfera/pirámide) que dibujaba `EntityRenderer` por MultiMesh.
@@ -73,6 +70,9 @@ const MODEL_YAW_OFFSET: float = 0.0
 const MODEL_FEET_DROP: float = 0.5
 # Distancia de cámara a partir de la cual se congela la animación (ahorro de CPU).
 const MODEL_ANIM_FREEZE_DIST: float = 60.0
+# Cadencia (ms reales) de las chispas de combate por esfera: el daño es continuo, así
+# que el «impacto» lo marca la animación de ataque, no la simulación.
+const COMBAT_SPARK_INTERVAL_MS: int = 500
 
 @export var world_bounds: Vector2 = Vector2(60.0, 60.0)
 
@@ -88,6 +88,10 @@ var _t_metabolism: float = 1.0
 var _t_speed: float = 2.0
 var _t_longevity: float = 120.0
 var _t_species: StringName = &""
+# `aggression` cacheada igual que los anteriores (mismo valor por defecto que el
+# `genome.get` al que sustituye): la leen por VECINO `_threat_pressure` (cada
+# decisión recorre todos los vecinos) y `_pick_fight_target`.
+var _t_aggression: float = 0.5
 # Escala VISUAL (independiente del gameplay): normaliza la altura del modelo .glb
 # a una banda estrecha en función de `size`, para que no haya enanos/gigantes y
 # que ambas especies midan igual a igual `size`. El genoma `size` se sigue usando
@@ -107,6 +111,13 @@ var generation: int = 1
 var given_name: String = ""
 var group_id: int = -1
 var reproduction_cooldown: float = 0.0
+# Plaga (modelo SIR, ver `systems/Plague.gd`). Las crías nacen sanas y sin inmunidad.
+var _plague_time_left: float = 0.0     # s sim de curso restantes; > 0 → infectado
+var _plague_course_s: float = 0.0      # duración total (s sim) del curso actual
+var _plague_frailty: float = 0.0       # debilidad al infectarse: fija el daño del curso
+var _plague_strain: int = 0            # cepa de la infección actual
+var _plague_immune_strain: int = -1    # última cepa superada
+var _plague_contagion_acc: float = 0.0 # s sim hacia el próximo intento de contagio
 # Inventario PERSONAL de recursos de economía (la comida es energía, no se guarda).
 # Cuando la esfera pertenece a un grupo, lo recolectado va a la bolsa común del
 # grupo y el gasto sale de ella; como loner usa este inventario. Al unirse a un
@@ -127,13 +138,16 @@ var _heading: float = 0.0
 # el MultiMesh. `_moving` lo fija `_move` para elegir entre animación walk/idle.
 var model: EntityModel = null
 var _moving: bool = false
+## Escala de efectos (pop-in, bounce) que tweenea EffectsDirector. `drive_model` la
+## multiplica en la Basis del modelo cada frame: un Tween sobre `model.scale` se pisaría.
+var fx_squash: Vector3 = Vector3.ONE
+## Tween de EffectsDirector que mueve `fx_squash` ahora mismo (pop-in o bounce), para
+## que el siguiente lo componga en vez de pisarlo. Estado visual: no va al save.
+var fx_tween: Tween = null
+## Próxima chispa de combate permitida (`Time.get_ticks_msec`). Estado visual: no va al save.
+var _fx_next_spark_ms: int = 0
 var _rng: RandomNumberGenerator
 var _alive: bool = true
-# Modo control: el jugador posee esta esfera y la maneja en 3ª persona (ver
-# `PlayerControl` / `PlayerController`). Mientras está activo se salta la IA y el
-# movimiento se integra por frame en `drive_player`, pero sigue siendo un organismo
-# real de la sim (energía, edad, muerte). Lo conmuta `set_controlled`.
-var controlled: bool = false
 var _current_action: int = BehaviorSystem.Action.WANDER
 var _current_speed_mult: float = 0.7
 var _action_changed: bool = false
@@ -257,6 +271,7 @@ func setup(new_genome: Dictionary, bounds: Vector2, gen: int = 1) -> void:
 	_t_speed = float(genome.get("speed", 2.0))
 	_t_longevity = float(genome.get("longevity", 120.0))
 	_t_species = StringName(String(genome.get("species", &"")))
+	_t_aggression = float(genome.get("aggression", 0.5))
 	# Escala visual: normalizada por la altura nativa del modelo de la especie.
 	var native_h: float = VisualScale.MODEL_NATIVE_HEIGHT_SCOUT if _t_species == &"B" else VisualScale.MODEL_NATIVE_HEIGHT_WARRIOR
 	_t_visual_scale = VisualScale.entity_model_scale(_t_size, native_h)
@@ -328,6 +343,9 @@ func _refresh_group_tag() -> void:
 	_group_tag.visible = true
 
 
+## Umbral de hambre del halo: `hunger_01 = 1 - energy/MAX_ENERGY` por encima de esto.
+const HALO_HUNGER_01: float = 0.7
+
 const NAME_TAG_MAX_DISTANCE: float = 25.0
 const NAME_TAG_FADE_START: float = 18.0
 
@@ -342,6 +360,9 @@ func drive_model(pos: Vector3, cam: Camera3D) -> void:
 		if MODEL_YAW_OFFSET != 0.0:
 			b = b.rotated(Vector3.UP, MODEL_YAW_OFFSET)
 		b = b.scaled(Vector3.ONE * _t_visual_scale)
+		# Squash de efectos en ejes locales del modelo (Y = vertical del cuerpo).
+		if fx_squash != Vector3.ONE:
+			b = b * Basis.from_scale(fx_squash)
 		model.global_transform = Transform3D(b, Vector3(pos.x, pos.y - MODEL_FEET_DROP, pos.z))
 
 		var st: StringName = &"idle"
@@ -351,10 +372,52 @@ func drive_model(pos: Vector3, cam: Camera3D) -> void:
 			st = &"walk"
 		model.set_state(st)
 		model.set_weapon_visible(weapon_level > 0)
+		if st == &"attack" and EffectsDirector.instance != null:
+			_request_hit_sparks()
+		# Halo de estado según el modo del jugador (independiente del slider de efectos).
+		var halo: int = -1
+		match UserSettings.halo_mode:
+			UserSettings.HaloMode.ALWAYS:
+				halo = _halo_state()
+			UserSettings.HaloMode.HOVER:
+				if self == Selection.current or self == Selection.hovered:
+					halo = _halo_state()
+		model.set_halo(halo)
 		if cam != null:
 			model.set_anim_active(
 				cam.global_position.distance_to(global_position) < MODEL_ANIM_FREEZE_DIST)
 	update_visuals(cam)
+
+
+## Estado del halo (`EntityModel.Halo`) o -1. Solo uno, por prioridad:
+## combate > plaga > hambre (`hunger_01 > 0.7`) > cortejo. Barato: corre cada frame.
+func _halo_state() -> int:
+	if _fight_target != null and is_instance_valid(_fight_target):
+		return EntityModel.Halo.COMBAT
+	if _plague_time_left > 0.0:
+		return EntityModel.Halo.PLAGUE
+	if energy < MAX_ENERGY * (1.0 - HALO_HUNGER_01):
+		return EntityModel.Halo.HUNGER
+	if _current_action == BehaviorSystem.Action.SEEK_MATE:
+		return EntityModel.Halo.COURTSHIP
+	return -1
+
+
+## Chispas de combate en el punto medio (dibujado) con el rival, cada
+## `COMBAT_SPARK_INTERVAL_MS` reales. El gate de distancia/seleccionada lo aplica
+## `EffectsDirector.request`; aquí solo la cadencia y el contacto: `attack` se pone
+## también mientras se persigue al rival, y entonces no hay impacto que marcar.
+func _request_hit_sparks() -> void:
+	var now: int = Time.get_ticks_msec()
+	if _fx_next_spark_ms > now:
+		return
+	if _xz_dist(global_position, _fight_target.global_position) > FIGHT_REACH * 1.25:
+		return
+	_fx_next_spark_ms = now + COMBAT_SPARK_INTERVAL_MS
+	var other: Vector3 = _fight_target.model.global_position if _fight_target.model != null \
+		else _fight_target.global_position - Vector3.UP * MODEL_FEET_DROP
+	var mid: Vector3 = (model.global_position + other) * 0.5 + Vector3.UP * _visual_height * 0.55
+	EffectsDirector.instance.request(&"hit_sparks", mid, clampf(_visual_height, 0.6, 1.6))
 
 
 ## Refresco visual por frame. Lo invoca `EntityRenderer` con la cámara ya
@@ -450,23 +513,17 @@ func _on_tick(dt_sim: float) -> void:
 	reproduction_cooldown = maxf(0.0, reproduction_cooldown - dt_sim)
 	_consume_energy(dt_sim)
 	_update_stress(dt_sim)
+	if _plague_time_left > 0.0:
+		_plague_tick(dt_sim)
 	if energy <= 0.0:
 		_die(&"hunger")
 		return
+	# Plaga y combate comparten `health`: si llega a cero estando infectada, es plaga.
 	if health <= 0.0:
-		_die(&"combat")
+		_die(&"plague" if _plague_time_left > 0.0 else &"combat")
 		return
-	var lifespan_mod: float = GlobalParams.lifespan_multiplier * _mod_lifespan
-	if age >= _t_longevity * lifespan_mod:
+	if age >= _effective_longevity():
 		_die(&"old_age")
-		return
-
-	# Modo control: el jugador maneja el movimiento por frame (`drive_player` desde
-	# `PlayerController`), así que se salta la IA y `_move`. Los chequeos de muerte
-	# de arriba ya corrieron: la esfera puede morir de hambre/combate/edad como
-	# cualquier otra (decisión del usuario: "organismo real"). El índice espacial lo
-	# mantiene `drive_player`; aquí no hay más que hacer.
-	if controlled:
 		return
 
 	# Limpieza si el grupo se disolvió (el último compañero murió y
@@ -506,12 +563,73 @@ func _on_tick(dt_sim: float) -> void:
 	SpatialIndex.update_sphere(self)
 
 
+## Modificador del entorno sobre `key` (`&"metabolism_mod"`, `&"speed_mod"`,
+## `&"vision_mod"`): el del bioma donde está la esfera por el de los eventos activos.
+## `Biomes` no sabe de `Climate`; la composición vive aquí.
+func _env_mod(key: StringName) -> float:
+	return Biomes.get_mod(Biomes.biome_at(global_position), key) * Climate.sphere_mod(key)
+
+
+## Longevidad efectiva (s sim): rasgo × multiplicador global × modificador de especie.
+## La usan la muerte por vejez y la duración del curso de la plaga.
+func _effective_longevity() -> float:
+	return _t_longevity * GlobalParams.lifespan_multiplier * _mod_lifespan
+
+
+## Curso de la infección: daño ponderado por la debilidad, contagio a los vecinos
+## mientras el evento esté activo (`Climate.plague_strength() > 0`) y, al acabar el
+## curso, cura con inmunidad a la cepa. La infección sigue aunque el
+## evento haya terminado. Si el daño deja la salud a cero, no se cura: el chequeo de
+## muerte de `_on_tick` la cuenta como plaga.
+func _plague_tick(dt_sim: float) -> void:
+	var tuning: SimTuning = GlobalParams.tuning
+	# Daño repartido por igual en el curso, con la debilidad fijada al infectarse: si se
+	# recalculara cada tick, la propia pérdida de salud la subiría y el daño total del
+	# curso derivaría por encima de `plague_damage_per_course × MAX_HEALTH × (0.5 + d)`.
+	health -= tuning.plague_damage_per_course * MAX_HEALTH * (0.5 + _plague_frailty) \
+		* dt_sim / _plague_course_s
+	if health <= 0.0:
+		return
+	if Climate.plague_strength() > 0.0:
+		_plague_contagion_acc -= dt_sim
+		if _plague_contagion_acc <= 0.0:
+			_plague_contagion_acc += tuning.plague_contagion_interval
+			for n in SpatialIndex.query_spheres(global_position, tuning.plague_radius):
+				if n != self:
+					Plague.try_infect(n as Sphere, _plague_strain, _rng)
+	_plague_time_left -= dt_sim
+	if _plague_time_left <= 0.0:
+		_plague_time_left = 0.0
+		_plague_immune_strain = _plague_strain
+		EventLog.log_event(&"plague_cured", {"id": get_instance_id(), "strain": _plague_strain,
+			"health": health}, StringName("sphere_%s" % String(genome.get("species", &"?"))))
+
+
+func is_plague_infected() -> bool:
+	return _plague_time_left > 0.0
+
+
+## Infecta con la cepa `strain` durante `plague_infection_frac` de la longevidad
+## efectiva, con la debilidad del momento fijada para todo el curso. El primer intento de
+## contagio se desfasa al azar dentro del intervalo para que los infectados no
+## consulten a sus vecinos todos en el mismo tick.
+func infect_plague(strain: int) -> void:
+	var tuning: SimTuning = GlobalParams.tuning
+	_plague_course_s = maxf(tuning.plague_infection_frac * _effective_longevity(), 1.0)
+	_plague_time_left = _plague_course_s
+	_plague_frailty = Plague.frailty(self)
+	_plague_strain = strain
+	_plague_contagion_acc = _rng.randf() * tuning.plague_contagion_interval
+	EventLog.log_event(&"plague_infected", {"id": get_instance_id(), "strain": strain,
+		"frailty": _plague_frailty}, StringName("sphere_%s" % String(genome.get("species", &"?"))))
+
+
 func _consume_energy(dt_sim: float) -> void:
 	var metabolism: float = _t_metabolism
 	var size: float = _t_size
 	var mod: float = _mod_metabolism
-	var biome_mod: float = Biomes.get_mod(Biomes.biome_at(global_position), "metabolism_mod")
-	energy -= dt_sim * metabolism * (0.6 + 0.4 * size) * mod * biome_mod
+	var env_mod: float = _env_mod(&"metabolism_mod")
+	energy -= dt_sim * metabolism * (0.6 + 0.4 * size) * mod * env_mod
 
 
 func _update_stress(dt_sim: float) -> void:
@@ -532,7 +650,7 @@ func _decide_action(dt_sim: float) -> void:
 	var vision_base: float = float(genome.get("vision", 6.0))
 	# Visión efectiva: base × (más grande = más visión) × (más joven = más visión)
 	var vision_eff: float = vision_base * (0.8 + 0.4 * size) * (1.0 + 0.3 * (1.0 - age_01))
-	var vision: float = vision_eff * Biomes.get_mod(Biomes.biome_at(global_position), "vision_mod")
+	var vision: float = vision_eff * _env_mod(&"vision_mod")
 
 	# Visión dividida: plantas detectadas al rango completo (función primaria del rasgo);
 	# esferas vecinas a 65% para que visión alta no infle artificialmente seek_mate/flee.
@@ -659,6 +777,26 @@ func _decide_action(dt_sim: float) -> void:
 	var hostile_target: bool = group_id != -1 and _fight_target != null \
 		and is_instance_valid(_fight_target) and _fight_target.group_id != -1 \
 		and Groups.is_hostile(group_id, _fight_target.group_id)
+	# Defensa de territorio contra INTRUSOS: lo mío que es el suelo donde está el
+	# objetivo × lo poco suyo que es (1 − su propiedad ahí). Contra la otra especie
+	# en mi tierra vale ~1; contra un vecino de mi especie y grupo, ~0. Con la
+	# propiedad del suelo que piso yo (`terr_own`) el bonus estaba activo siempre y
+	# subía el tope de fight a 0.95 (Fidelidad, M1).
+	var target_terr_own: float = 0.0
+	if _fight_target != null and is_instance_valid(_fight_target):
+		var tpos: Vector3 = _fight_target.global_position
+		var mine: float = TerritorySystem.ownership_at(tpos, species_sn, group_id)
+		if mine > 0.0:
+			var theirs: float = TerritorySystem.ownership_at(tpos,
+				StringName(String(_fight_target.genome.get("species", &""))), _fight_target.group_id)
+			target_terr_own = mine * (1.0 - theirs)
+	# Defensa de crías: adulto en su nido con crías propias dentro, frente a un objetivo
+	# de OTRO grupo (rival o solitario). Solo con objetivo de pelea, por coste: la
+	# consulta es O(1) (crías cacheadas en el nido), pero no se paga en cada decisión.
+	var nest_guard: bool = false
+	if _fight_target != null and is_instance_valid(_fight_target) \
+			and _fight_target.group_id != group_id:
+		nest_guard = Groups.nest_guard(self)
 
 	# --- Econom\u00eda: necesidad de recursos y nodo cosechable a la vista ---
 	# Drive de arma: baja supervivencia esperada en conflicto \u2192 fabricar arma.
@@ -718,7 +856,7 @@ func _decide_action(dt_sim: float) -> void:
 		"aggression": aggression_eff,
 		"sociability": sociability_eff,
 		"repro_appetite": repro_appetite,
-		"repro_on_cooldown": reproduction_cooldown > 0.0,
+		"repro_blocked": not can_reproduce(),
 		"mate_in_sight": _target_mate != null,
 		"threat_present": threat != null,
 		"threat_pressure": threat_pressure,
@@ -731,6 +869,8 @@ func _decide_action(dt_sim: float) -> void:
 		"hostile_target": hostile_target,
 		"territory_rival_pressure": terr_rival,
 		"territory_ownership": terr_own,
+		"target_territory_ownership": target_terr_own,
+		"nest_guard": nest_guard,
 		"enemy_farm_in_range": _target_farm != null,
 	}
 	var prev_action: int = _current_action
@@ -943,9 +1083,9 @@ func _move(dt_sim: float) -> void:
 		if dir_len > 0.01:
 			dir = dir / dir_len
 			var speed: float = _t_speed * _current_speed_mult
-			var biome_speed: float = Biomes.get_mod(Biomes.biome_at(global_position), "speed_mod")
+			var env_speed: float = _env_mod(&"speed_mod")
 			# Desplazamiento del paso; salvaguarda: no sobrepasar el punto de ruta.
-			var step: float = minf(speed * biome_speed * dt_sim, dir_len)
+			var step: float = minf(speed * env_speed * dt_sim, dir_len)
 			new_pos.x += dir.x * step
 			new_pos.z += dir.z * step
 			_moving = step > 0.01
@@ -960,147 +1100,6 @@ func _move(dt_sim: float) -> void:
 	global_position = new_pos
 	_interp_to = new_pos
 	_interp_tick = SimulationClock.get_tick_count()
-
-
-# ---------------- MODO CONTROL (jugador en 3ª persona) ----------------
-# El jugador posee la esfera vía `PlayerControl`. La IA y `_move` se saltan (ver el
-# guard de `_on_tick`); el movimiento y las acciones llegan por frame desde
-# `PlayerController`, reutilizando los métodos de interacción de la IA.
-
-## Activa/desactiva el control directo. Al poseerla suelta los objetivos y la ruta de
-## IA para que no arrastre una decisión previa; al soltarla reanuda la IA cuanto antes.
-func set_controlled(on: bool) -> void:
-	controlled = on
-	if on:
-		_target_plant = null
-		_target_resource = null
-		_target_mate = null
-		_fight_target = null
-		_target_farm = null
-		_food_rival = null
-		_flee_target = null
-		_nav_path = PackedVector3Array()
-		_nav_path_idx = 0
-		_nav_goal = Vector3(INF, INF, INF)
-		_current_action = BehaviorSystem.Action.WANDER
-		_moving = false
-	else:
-		_fight_target = null
-		_decision_cooldown = 0.0
-		_action_started_t = SimulationClock.get_sim_time()
-
-
-## Movimiento por frame bajo control del jugador. Lo llama `PlayerController` con la
-## dirección deseada en XZ (ya relativa a la cámara) y el delta de frame. Integra el
-## desplazamiento, pega al terreno y mantiene el índice espacial. Sembrar
-## `_interp_from/_to` con la posición real evita que `EntityRenderer` interpole con
-## retardo (el pawn se ve fluido y sin lag). Resetea `_fight_target` cada frame: el
-## ataque lo vuelve a fijar `player_attack` si procede (así la animación de ataque solo
-## se mantiene mientras se golpea).
-func drive_player(move_dir: Vector3, sprint: bool, delta: float) -> void:
-	_fight_target = null
-	move_dir.y = 0.0
-	var new_pos: Vector3 = global_position
-	_moving = false
-	if move_dir.length_squared() > 0.0001:
-		var dir: Vector3 = move_dir.normalized()
-		var speed: float = _t_speed * (PLAYER_SPRINT_MULT if sprint else 1.0)
-		speed *= Biomes.get_mod(Biomes.biome_at(global_position), "speed_mod")
-		new_pos += dir * speed * delta
-		_heading = atan2(dir.x, dir.z)
-		_moving = true
-	# Contención lateral dentro del plano (mismo margen que `_enforce_bounds`).
-	var half_x: float = world_bounds.x * 0.5 - 1.0
-	var half_z: float = world_bounds.y * 0.5 - 1.0
-	new_pos.x = clampf(new_pos.x, -half_x, half_x)
-	new_pos.z = clampf(new_pos.z, -half_z, half_z)
-	if _world != null:
-		new_pos.y = _world.get_terrain_height(new_pos.x, new_pos.z) + 0.5
-	global_position = new_pos
-	_interp_from = new_pos
-	_interp_to = new_pos
-	_interp_tick = SimulationClock.get_tick_count()
-	SpatialIndex.update_sphere(self)
-
-
-## Ataque del jugador (clic izquierdo): golpea a la esfera viva más cercana dentro de
-## `FIGHT_REACH`, reutilizando el combate continuo de la IA (`_attack`, daño escalado
-## por `dt`). Fija `_fight_target` para la animación de ataque.
-func player_attack(dt: float) -> void:
-	var best: Sphere = null
-	var best_d: float = FIGHT_REACH * FIGHT_REACH
-	for n in SpatialIndex.query_spheres(global_position, FIGHT_REACH):
-		if n == self or not (n is Sphere) or not n._alive:
-			continue
-		var d: float = global_position.distance_squared_to(n.global_position)
-		if d < best_d:
-			best_d = d
-			best = n
-	_fight_target = best
-	if best != null:
-		_attack(best, dt)
-
-
-## Acción contextual del jugador (tecla E), por prioridad y reutilizando la lógica de
-## la IA: comer planta/cadáver al alcance, recolectar un nodo de recurso, o
-## reproducirse con una pareja válida cercana.
-func player_interact() -> void:
-	var food: Node3D = _nearest_edible(FOOD_REACH)
-	if food != null:
-		_eat(food)
-		return
-	var node: Node3D = _nearest_harvestable(GATHER_REACH)
-	if node != null:
-		_harvest_node(node)
-		return
-	var mate: Sphere = _nearest_mate(MATE_REACH)
-	if mate != null:
-		_attempt_reproduction(mate)
-
-
-## Fuente de comida comestible (planta o cadáver) más cercana dentro de `reach`.
-func _nearest_edible(reach: float) -> Node3D:
-	var best: Node3D = null
-	var best_d: float = reach * reach
-	for p in SpatialIndex.query_plants(global_position, reach):
-		if not _is_edible(p):
-			continue
-		var d: float = global_position.distance_squared_to(p.global_position)
-		if d < best_d:
-			best_d = d
-			best = p
-	return best
-
-
-## Nodo de recurso cosechable (madera/piedra/oro) más cercano dentro de `reach`.
-func _nearest_harvestable(reach: float) -> Node3D:
-	var best: Node3D = null
-	var best_d: float = reach * reach
-	for t in [ResourceNode.Type.WOOD, ResourceNode.Type.STONE, ResourceNode.Type.GOLD]:
-		for n in SpatialIndex.query_resources(global_position, reach, t):
-			if not _is_harvestable_node(n):
-				continue
-			var d: float = global_position.distance_squared_to((n as Node3D).global_position)
-			if d < best_d:
-				best_d = d
-				best = n
-	return best
-
-
-## Pareja válida (misma especie, sin cooldown, viva) más cercana dentro de `reach`.
-func _nearest_mate(reach: float) -> Sphere:
-	var best: Sphere = null
-	var best_d: float = reach * reach
-	for n in SpatialIndex.query_spheres(global_position, reach):
-		if n == self or not (n is Sphere):
-			continue
-		if not _is_mate_valid(n, reach):
-			continue
-		var d: float = global_position.distance_squared_to(n.global_position)
-		if d < best_d:
-			best_d = d
-			best = n
-	return best
 
 
 # ---------------- NAVEGACIÓN EN XZ (independiente de la Y del navmesh) ----------------
@@ -1255,9 +1254,15 @@ func _flee_from(from_pos: Vector3, _dt_sim: float, fresh: bool = false) -> void:
 	# M1: si la esfera tiene grupo y el centroide está del lado contrario a la
 	# amenaza, sesgar la huida HACIA los suyos (retirada a la manada) en vez de
 	# huir a ciegas. El abanico de probes de abajo sigue garantizando navegabilidad.
+	# Defensa de crías: una cría de un grupo con nido se refugia en el nido, no en el
+	# centroide (mismo sesgo y misma guarda de no huir hacia la amenaza).
 	var base_dir := away
 	if group_id != -1 and Groups.has_group(group_id):
 		var centroid: Vector3 = Groups.get_centroid(group_id)
+		if Groups.is_cub(self):
+			var nest_pos: Vector3 = Groups.get_nest_position(group_id)
+			if nest_pos.x != INF:
+				centroid = nest_pos
 		if centroid.x != INF:
 			var to_c := centroid - global_position
 			to_c.y = 0.0
@@ -1445,11 +1450,14 @@ func _eat(plant: Node3D) -> void:
 		return
 	if plant.has_method("register_visit"):
 		plant.register_visit()
+	# Posición de lo comido (planta o cadáver) antes de `consume`, que puede liberarlo.
+	var from: Vector3 = plant.global_position
 	var gained: float = plant.consume()
 	if gained > 0.0:
 		energy = minf(MAX_ENERGY, energy + gained)
 		_eat_count += 1
-		EventLog.log_event(&"eat", {"id": get_instance_id(), "sphere": full_name(), "energy": energy},
+		EventLog.log_event(&"eat", {"id": get_instance_id(), "sphere": full_name(), "energy": energy,
+				"from": [snappedf(from.x, 0.01), snappedf(from.y, 0.01), snappedf(from.z, 0.01)]},
 			StringName("sphere_%s" % String(genome.get("species", &"?"))))
 		# Comida de granja ajena: si la relación con el dueño es buena, es COMPARTIR
 		# (sube amistad); si no, es ROBO (penaliza, una sola vez por planta).
@@ -1465,8 +1473,22 @@ func _eat(plant: Node3D) -> void:
 		_target_plant = null
 
 
+## Puede reproducirse YA (no mira energía ni afinidad: esas tienen su propio chequeo).
+## Gate único para acción, factibilidad de seek_mate y elección de pareja, para que
+## los tres digan lo mismo (si no, el joven corteja y falla al llegar una y otra vez).
+## La madurez es fracción de la longevidad y no una edad absoluta: `longevity` es
+## heredable y una edad fija premiaría evolucionar longevidades cortas (madurar
+## antes sin coste). Ver docs: Plan - Fidelidad de la Simulación (M2).
+func can_reproduce() -> bool:
+	if reproduction_cooldown > 0.0:
+		return false
+	if health < MAX_HEALTH * GlobalParams.tuning.repro_min_health_01:
+		return false
+	return age / maxf(_t_longevity, 1.0) >= GlobalParams.tuning.repro_maturity_01
+
+
 func _attempt_reproduction(mate: Sphere) -> void:
-	if reproduction_cooldown > 0.0 or mate.reproduction_cooldown > 0.0:
+	if not can_reproduce() or not mate.can_reproduce():
 		return
 	if energy < REPRO_ENERGY_COST + 20.0 or mate.energy < REPRO_ENERGY_COST + 20.0:
 		return
@@ -1488,9 +1510,8 @@ func _attempt_reproduction(mate: Sphere) -> void:
 		age / maxf(float(genome.get("longevity", 120.0)), 1.0)
 		+ mate.age / maxf(float(mate.genome.get("longevity", 120.0)), 1.0)
 	)
-	var child_genome: Dictionary = Genetics.cross(genome, mate.genome, stress_avg, age_avg)
-	var child: Sphere = preload("res://entities/Sphere.tscn").instantiate()
-	get_parent().add_child(child)
+	# Dónde nace la cría ANTES del cruce: su bioma de nacimiento es el del punto
+	# de nacimiento, no el de un progenitor (ruido en las fronteras).
 	var mid_pos := (global_position + mate.global_position) * 0.5
 	# Desplazar al hijo perpendicularmente al eje de los padres: nacer en el
 	# punto medio lo dejaba solapado dentro de los colliders de ambos (radio
@@ -1504,6 +1525,12 @@ func _attempt_reproduction(mate: Sphere) -> void:
 	var spawn_xz := mid_pos + perp * 1.4
 	spawn_xz.x = clampf(spawn_xz.x, -world_bounds.x * 0.5 + 1.0, world_bounds.x * 0.5 - 1.0)
 	spawn_xz.z = clampf(spawn_xz.z, -world_bounds.y * 0.5 + 1.0, world_bounds.y * 0.5 - 1.0)
+	var birth_biome: int = Biomes.biome_at(spawn_xz)
+	var child_genome: Dictionary = Genetics.cross(genome, mate.genome, stress_avg, age_avg, birth_biome)
+	# `last_sigma` es estado compartido del autoload: se lee ya, pegado al cruce.
+	var birth_sigma: float = Genetics.last_sigma
+	var child: Sphere = preload("res://entities/Sphere.tscn").instantiate()
+	get_parent().add_child(child)
 	# Y al nivel del progenitor más alto: la gravedad lo asienta sobre el
 	# terreno sin nacer flotando encima de los padres.
 	child.global_position = Vector3(spawn_xz.x, maxf(global_position.y, mate.global_position.y), spawn_xz.z)
@@ -1515,8 +1542,18 @@ func _attempt_reproduction(mate: Sphere) -> void:
 		"id": child.get_instance_id(),
 		"parent_a": full_name(),
 		"parent_b": mate.full_name(),
+		# instance_id de los padres: EffectsDirector los resuelve para los corazones.
+		"parent_a_id": get_instance_id(),
+		"parent_b_id": mate.get_instance_id(),
 		"child": child.full_name(),
 		"generation": child.generation,
+		"biome": String(Biomes.BIOME_KEYS[birth_biome]),
+		"sigma": birth_sigma,
+		"size": float(child_genome.get("size", 0.0)),
+		"speed": float(child_genome.get("speed", 0.0)),
+		"vision": float(child_genome.get("vision", 0.0)),
+		"metabolism": float(child_genome.get("metabolism", 0.0)),
+		"longevity": float(child_genome.get("longevity", 0.0)),
 	}, StringName("sphere_%s" % String(genome.get("species", &"?"))))
 	born.emit(child)
 
@@ -1579,7 +1616,7 @@ func _call_for_help(attacker: Sphere) -> void:
 	var age_01: float = clampf(age / float(genome.get("longevity", 120.0)), 0.0, 1.0)
 	var vision_base: float = float(genome.get("vision", 6.0))
 	var vision_eff: float = vision_base * (0.8 + 0.4 * size) * (1.0 + 0.3 * (1.0 - age_01))
-	var witness_radius: float = vision_eff * Biomes.get_mod(Biomes.biome_at(global_position), "vision_mod")
+	var witness_radius: float = vision_eff * _env_mod(&"vision_mod")
 	for n in SpatialIndex.query_spheres(global_position, witness_radius):
 		if n == self or n == attacker or not (n is Sphere) or not n._alive:
 			continue
@@ -1671,21 +1708,72 @@ func _pick_food_target(plants: Array) -> Node3D:
 	var terr_avoid: float = GlobalParams.tuning.territory_food_avoid \
 		* (1.0 - float(genome.get("bravery", 0.5))) \
 		* clampf(energy / MAX_ENERGY, 0.0, 1.0)
-	if terr_avoid > 0.0:
+	#
+	# Rendimiento: en vez de ordenar `edible` entero (sort_custom con lambda, caro
+	# en GDScript) y recorrerlo, se sacan las candidatas una a una por mínimo de la
+	# MISMA clave que usaba el comparador (precalculada; nada en el bucle mueve
+	# esferas ni plantas). Casi siempre basta la primera. Es idéntico al sort
+	# mientras cada mínimo extraído sea ÚNICO: entonces cualquier ordenación
+	# correcta lo pone en esa misma posición. Si aparece un empate (o un NaN), el
+	# orden entre empatadas depende del algoritmo no estable de Godot: ahí se
+	# ordena `edible` (aún en su orden original) con el comparador de siempre y se
+	# sigue desde la misma posición, cuyo prefijo coincide por lo anterior.
+	var n_edible: int = edible.size()
+	var keys: PackedFloat64Array = PackedFloat64Array()
+	keys.resize(n_edible)
+	var sort_by_eff: bool = terr_avoid > 0.0
+	var eff: Dictionary = {}
+	if sort_by_eff:
 		var sp: StringName = StringName(genome.get("species", &""))
-		var eff: Dictionary = {}
 		for p in edible:
 			eff[p.get_instance_id()] = global_position.distance_to(p.global_position) \
 				* (1.0 + TerritorySystem.rival_pressure_at(p.global_position, sp, group_id) * terr_avoid)
-		edible.sort_custom(func(a, b):
-			return float(eff[a.get_instance_id()]) < float(eff[b.get_instance_id()]))
+		for i in n_edible:
+			keys[i] = float(eff[edible[i].get_instance_id()])
 	else:
-		edible.sort_custom(_closer_plant)
+		for i in n_edible:
+			keys[i] = global_position.distance_squared_to(edible[i].global_position)
+	var taken: PackedByteArray = PackedByteArray()
+	taken.resize(n_edible)
+	taken.fill(0)
+	var sorted_mode: bool = false
+	var pos: int = 0
 	_food_rival = null
 	var fallback: Node3D = null
 	var examined: int = 0
 	var my_id: int = get_instance_id()
-	for p in edible:
+	while pos < n_edible:
+		var p = null
+		if not sorted_mode:
+			var best_i: int = -1
+			var best_k: float = INF
+			var tie: bool = false
+			for i in n_edible:
+				if taken[i] != 0:
+					continue
+				var k: float = keys[i]
+				if is_nan(k):
+					tie = true
+					break
+				if k < best_k:
+					best_k = k
+					best_i = i
+					tie = false
+				elif k == best_k:
+					tie = true
+			if tie or best_i == -1:
+				sorted_mode = true
+				if sort_by_eff:
+					edible.sort_custom(func(a, b):
+						return float(eff[a.get_instance_id()]) < float(eff[b.get_instance_id()]))
+				else:
+					edible.sort_custom(_closer_plant)
+			else:
+				taken[best_i] = 1
+				p = edible[best_i]
+		if sorted_mode:
+			p = edible[pos]
+		pos += 1
 		# Alcanzabilidad evaluada AQUÍ (no al construir `edible`): solo se paga
 		# para las plantas más cercanas que realmente consideramos, no para
 		# todas las visibles. Filtra plantas con el path bloqueado por el
@@ -1785,11 +1873,13 @@ func _threat_pressure(other: Sphere, vision: float) -> float:
 		return 0.0
 	if other.get_instance_id() == _last_attacker_id:
 		return 1.5 * falloff
-	var aggression: float = float(other.genome.get("aggression", 0.5))
+	# Rasgos del vecino desde la caché tipada (`_t_*`, fijada en `setup`): mismo
+	# valor que `genome.get(...)` sin hashear strings por vecino y decisión.
+	var aggression: float = other._t_aggression
 	# Una esfera neutral (no atacante) sólo intimida si es claramente agresiva.
 	if aggression < 0.55:
 		return 0.0
-	var size_ratio: float = float(other.genome.get("size", 1.0)) / maxf(float(genome.get("size", 1.0)), 0.1)
+	var size_ratio: float = other._t_size / maxf(_t_size, 0.1)
 	var affinity: float = Relationships.get_affinity(get_instance_id(), other.get_instance_id())
 	var amity: float = clampf((affinity + 100.0) / 200.0, 0.0, 1.0)
 	return clampf(aggression * size_ratio * (1.0 - amity), 0.0, 2.0) * falloff
@@ -1832,23 +1922,23 @@ func _pick_enemy_farm(vision: float) -> Node3D:
 	return best
 
 
-## ¿Sigue `m` siendo una pareja viable? Objetivo-esfera válido + sin cooldown
-## reproductivo (en ninguno de los dos) + misma especie.
+## ¿Sigue `m` siendo una pareja viable? Objetivo-esfera válido + ambos pueden
+## reproducirse (`can_reproduce()`) + misma especie.
 func _is_mate_valid(m, keep_radius: float) -> bool:
 	return _is_sphere_target_valid(m, keep_radius) \
-		and reproduction_cooldown <= 0.0 and m.reproduction_cooldown <= 0.0 \
+		and can_reproduce() and m.can_reproduce() \
 		and String(m.genome.get("species", &"")) == String(genome.get("species", &""))
 
 
 func _pick_potential_mate(neighbors: Array) -> Sphere:
-	if reproduction_cooldown > 0.0:
+	if not can_reproduce():
 		return null
 	var best: Sphere = null
 	var best_score: float = 0.0
 	for n in neighbors:
 		if n == self or not (n is Sphere) or not n._alive:
 			continue
-		if n.reproduction_cooldown > 0.0:
+		if not n.can_reproduce():
 			continue
 		if String(n.genome.get("species", &"")) != String(genome.get("species", &"")):
 			continue
@@ -1866,7 +1956,7 @@ func _pick_potential_mate(neighbors: Array) -> Sphere:
 
 func _pick_fight_target(neighbors: Array) -> Sphere:
 	var aggression: float = (
-		float(genome.get("aggression", 0.5))
+		_t_aggression
 		* GlobalParams.aggression_modifier
 		* GlobalParams.get_species_mod(genome.get("species", &""), &"aggression")
 	)
@@ -1925,7 +2015,9 @@ func _maybe_join_group(neighbors: Array) -> void:
 			continue
 		var affinity: float = Relationships.get_affinity(get_instance_id(), n.get_instance_id())
 		if affinity >= 5.0:
-			group_id = n.group_id if n.group_id != -1 else n.get_instance_id()
+			# Grupo del vecino, o uno nuevo con id del contador de `Groups` (estable
+			# entre procesos, ver `GroupSystem.new_group_id`).
+			group_id = n.group_id if n.group_id != -1 else Groups.new_group_id()
 			if n.group_id == -1:
 				n.group_id = group_id
 				Groups.register_member(group_id, n)
@@ -2185,4 +2277,169 @@ func _die(cause: StringName) -> void:
 	EventLog.log_event(&"death", death_data,
 		StringName("sphere_%s" % String(genome.get("species", &"?"))))
 	died.emit(cause)
+	# Fantasma de muerte: el director adopta el modelo (hijo de este nodo) ANTES del
+	# queue_free y lo funde a gris 1 s. Sin director (headless) o sin presupuesto,
+	# el modelo se libera con la esfera como siempre.
+	if model != null and EffectsDirector.instance != null \
+			and EffectsDirector.instance.adopt_dying_model(model, model.global_position):
+		model = null
 	queue_free()
+
+
+# ---------------- GUARDADO ----------------
+# Ver `SaveGame` y el plan «Guardado y Carga de Escenarios». Las referencias a otras
+# entidades se guardan como ÍNDICE de save (posición en `entities`), no como
+# `instance_id`, que cambia en cada proceso: `ids` traduce instance_id → índice al
+# guardar y `node_of` índice → nodo al cargar. Un índice -1 = sin referencia.
+
+## Foto de esta esfera para el save. No se guarda lo que se recalcula solo: la caché
+## `_t_*` (la rehace `setup`), los mods por especie y el color (los rehacen
+## `setup`/`_refresh_name_tag`).
+func to_save(ids: Dictionary) -> Dictionary:
+	return {
+		"k": &"sphere",
+		"pos": global_position,
+		"genome": genome.duplicate(true),
+		"generation": generation,
+		"given_name": given_name,
+		"energy": energy,
+		"health": health,
+		"stress": stress,
+		"age": age,
+		"reproduction_cooldown": reproduction_cooldown,
+		"plague_time_left": _plague_time_left,
+		"plague_course_s": _plague_course_s,
+		"plague_frailty": _plague_frailty,
+		"plague_strain": _plague_strain,
+		"plague_immune_strain": _plague_immune_strain,
+		"plague_contagion_acc": _plague_contagion_acc,
+		"inventory": inventory.duplicate(),
+		"weapon_level": weapon_level,
+		# Tal cual: con el contador propio de grupos (M2) el id ya es estable.
+		"group_id": group_id,
+		"heading": _heading,
+		"current_action": _current_action,
+		"current_speed_mult": _current_speed_mult,
+		"resource_scan_cooldown": _resource_scan_cooldown,
+		"action_started_t": _action_started_t,
+		"eat_count": _eat_count,
+		"seek_food_seconds": _seek_food_seconds,
+		"seek_food_distance": _seek_food_distance,
+		"seek_food_last_pos": _seek_food_last_pos,
+		"group_food_hint": _group_food_hint,
+		"flee_from_pos": _flee_from_pos,
+		"nav_path": _nav_path,
+		"nav_path_idx": _nav_path_idx,
+		"nav_goal": _nav_goal,
+		# Los que `activate()` pisa: se sobrescriben después en `from_save`.
+		"decision_cooldown": _decision_cooldown,
+		"interp_from": _interp_from,
+		"interp_to": _interp_to,
+		"interp_tick": _interp_tick,
+		# Objetivos de la IA como índice de save. Un objetivo ya liberado o que no entró
+		# en la foto (muerto, en cola de borrado) se guarda como -1 (sin objetivo).
+		"target_plant": _save_ref(_target_plant, ids),
+		"target_resource": _save_ref(_target_resource, ids),
+		"target_mate": _save_ref(_target_mate, ids),
+		"fight_target": _save_ref(_fight_target, ids),
+		"target_farm": _save_ref(_target_farm, ids),
+		"food_rival": _save_ref(_food_rival, ids),
+		"flee_target": _save_ref(_flee_target, ids),
+		"last_attacker": int(ids.get(_last_attacker_id, -1)),
+		"plant_blacklist": _save_blacklist(ids),
+	}
+
+
+## Índice de save de `n`, o -1 si no hay referencia o la entidad no está en la foto.
+## `Variant` y no `Object`: un objetivo puede ser un objeto ya liberado, y pasarlo a un
+## parámetro tipado es un error en tiempo de ejecución (la foto saldría vacía).
+static func _save_ref(n: Variant, ids: Dictionary) -> int:
+	if not is_instance_valid(n):
+		return -1
+	return int(ids.get((n as Object).get_instance_id(), -1))
+
+
+## `_plant_blacklist` con las claves (id de planta) traducidas a índice de save. Las
+## entradas de plantas que ya no están en la foto se descartan: no se pueden reelegir.
+func _save_blacklist(ids: Dictionary) -> Dictionary:
+	var out: Dictionary = {}
+	for pid in _plant_blacklist:
+		if ids.has(pid):
+			out[int(ids[pid])] = int(_plant_blacklist[pid])
+	return out
+
+
+## Restaura esta esfera desde `to_save`. Precondición: ya está en el árbol (`add_child`
+## hecho por `SaveGame.restore`) y `SimulationClock` ya tiene el `_tick_count` del save.
+## Sigue la regla del plan: posición → `setup`/campos → `activate()` → sobrescribir lo
+## que `activate()` pisa (`_decision_cooldown` desde el instance_id nuevo, `_interp_*`).
+## `activate()` va aquí dentro para que `SaveGame.restore` llame a esto EN EL ORDEN
+## guardado: el orden de registro en `SimulationClock._entities` es el de tick.
+func from_save(d: Dictionary, node_of: Array) -> void:
+	global_position = d.pos
+	setup(Dictionary(d.genome).duplicate(true), world_bounds, int(d.generation))
+	# `_ready` ya sorteó nombre y rumbo: se pisan con los guardados.
+	given_name = String(d.given_name)
+	energy = float(d.energy)
+	health = float(d.health)
+	stress = float(d.stress)
+	age = float(d.age)
+	reproduction_cooldown = float(d.reproduction_cooldown)
+	# Sin `infect_plague`: restaurar no es infectar (ni se re-loguea `plague_infected`).
+	_plague_time_left = float(d.get("plague_time_left", 0.0))
+	_plague_course_s = float(d.get("plague_course_s", 0.0))
+	_plague_frailty = float(d.get("plague_frailty", 0.0))
+	_plague_strain = int(d.get("plague_strain", 0))
+	_plague_immune_strain = int(d.get("plague_immune_strain", -1))
+	_plague_contagion_acc = float(d.get("plague_contagion_acc", 0.0))
+	inventory = Dictionary(d.inventory).duplicate()
+	weapon_level = int(d.weapon_level)
+	# Tal cual: `Groups.from_save` reconstruye los grupos después de todas las entidades
+	# y recolorea a sus miembros (hasta entonces `get_group_name` da "").
+	group_id = int(d.group_id)
+	_heading = float(d.heading)
+	_current_action = int(d.current_action)
+	_current_speed_mult = float(d.current_speed_mult)
+	_resource_scan_cooldown = float(d.resource_scan_cooldown)
+	_action_started_t = float(d.action_started_t)
+	_eat_count = int(d.eat_count)
+	_seek_food_seconds = float(d.seek_food_seconds)
+	_seek_food_distance = float(d.seek_food_distance)
+	_seek_food_last_pos = d.seek_food_last_pos
+	_group_food_hint = d.group_food_hint
+	_flee_from_pos = d.flee_from_pos
+	_nav_path = d.nav_path
+	_nav_path_idx = int(d.nav_path_idx)
+	_nav_goal = d.nav_goal
+	# Objetivos: índice → nodo. `node_of` ya tiene TODAS las entidades instanciadas
+	# (`SaveGame.restore` crea antes de restaurar), así que un objetivo con índice
+	# mayor que esta esfera también resuelve, aunque aún no se haya activado.
+	_target_plant = _node_at(node_of, int(d.target_plant)) as Node3D
+	_target_resource = _node_at(node_of, int(d.target_resource)) as Node3D
+	_target_mate = _node_at(node_of, int(d.target_mate)) as Sphere
+	_fight_target = _node_at(node_of, int(d.fight_target)) as Sphere
+	_target_farm = _node_at(node_of, int(d.target_farm)) as Node3D
+	_food_rival = _node_at(node_of, int(d.food_rival)) as Sphere
+	_flee_target = _node_at(node_of, int(d.flee_target)) as Sphere
+	var attacker: Node = _node_at(node_of, int(d.last_attacker))
+	_last_attacker_id = attacker.get_instance_id() if attacker != null else 0
+	_plant_blacklist = {}
+	var blacklist: Dictionary = d.plant_blacklist
+	for idx in blacklist:
+		var p: Node = _node_at(node_of, int(idx))
+		if p != null:
+			_plant_blacklist[p.get_instance_id()] = int(blacklist[idx])
+	_refresh_name_tag()
+	activate()
+	_decision_cooldown = float(d.decision_cooldown)
+	_interp_from = d.interp_from
+	_interp_to = d.interp_to
+	_interp_tick = int(d.interp_tick)
+
+
+## Nodo del índice de save `idx`, o null si es -1, está fuera de rango o ya no es válido.
+static func _node_at(node_of: Array, idx: int) -> Node:
+	if idx < 0 or idx >= node_of.size():
+		return null
+	var n: Node = node_of[idx]
+	return n if is_instance_valid(n) else null

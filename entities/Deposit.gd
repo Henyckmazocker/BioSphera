@@ -37,6 +37,32 @@ func activate() -> void:
 	})
 
 
+# ---------------- GUARDADO ----------------
+# Ver `SaveGame` y `Sphere.to_save`. No tickea: su orden de save (tras `_slow`) no
+# afecta a ninguna franja de tick.
+
+func to_save(_ids: Dictionary) -> Dictionary:
+	return {
+		"k": &"deposit",
+		"pos": global_position,
+		"deposit_type": deposit_type,
+		"units_total": units_total,
+		"units_per_harvest": units_per_harvest,
+		"units_left": units_left,
+	}
+
+
+## Restaura desde `to_save`. `activate()` hace `units_left = units_total` (yacimiento
+## recién descubierto): las existencias guardadas se sobrescriben DESPUÉS.
+func from_save(d: Dictionary, _node_of: Array) -> void:
+	global_position = d.pos
+	deposit_type = int(d.deposit_type)
+	units_total = int(d.units_total)
+	units_per_harvest = int(d.units_per_harvest)
+	activate()
+	units_left = int(d.units_left)
+
+
 func harvest() -> float:
 	if units_left <= 0:
 		return 0.0

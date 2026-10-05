@@ -235,6 +235,24 @@ func group_ownership_at(pos: Vector3, group_id: int) -> float:
 	return clampf(float((cell["groups"] as Dictionary).get(group_id, 0.0)) / full, 0.0, 1.0)
 
 
+## Grupo con mayor influencia BRUTA en la celda de `pos` (-1 si no hay ninguno).
+## Mismo criterio que el overlay (`get_overlay_cells`). Complementa a
+## `group_ownership_at`, que recorta a 1.0 y no distingue quién manda cuando varios
+## grupos solapados superan `territory_dominance_full`.
+func dominant_group_at(pos: Vector3) -> int:
+	var cell: Dictionary = _touch(_cell_of(pos), SimulationClock.get_sim_time(), false)
+	if cell.is_empty():
+		return -1
+	var top_gid: int = -1
+	var top_inf: float = 0.0
+	for gid in cell["groups"]:
+		var inf: float = float(cell["groups"][gid])
+		if inf > top_inf:
+			top_inf = inf
+			top_gid = int(gid)
+	return top_gid
+
+
 ## Para el overlay de visualización: una entrada por celda NO vacía, puesta al
 ## día por decaimiento. Cada entrada da la especie y el grupo dominantes de la
 ## celda con su fuerza [0..1] (normalizada por `territory_dominance_full`).
@@ -399,3 +417,17 @@ func _decay_map(m: Dictionary, factor: float) -> void:
 			m.erase(k)
 		else:
 			m[k] = v
+
+
+# ---------------- GUARDADO ----------------
+# Ver `SaveGame`. Las claves de grupo de cada celda son ids de grupo, estables con el
+# contador de `Groups`: van tal cual. `_plant_counts`/`_plant_total` NO se guardan: los
+# reconstruye `Plant.activate` al restaurar cada planta.
+
+func to_save() -> Dictionary:
+	return {"cells": _cells.duplicate(true), "log_timer": _log_timer}
+
+
+func from_save(d: Dictionary) -> void:
+	_cells = Dictionary(d.get("cells", {})).duplicate(true)
+	_log_timer = float(d.get("log_timer", 0.0))

@@ -11,8 +11,9 @@ config_version=5
 [application]
 
 config/name="BioSphera"
+config/version="0.3.0"
 run/main_scene="res://ui/StartScreen.tscn"
-config/features=PackedStringArray("4.6", "Forward Plus")
+config/features=PackedStringArray("4.7", "Forward Plus")
 config/icon="res://icon.svg"
 
 [autoload]
@@ -30,7 +31,8 @@ Selection="*res://systems/SelectionSystem.gd"
 Groups="*res://systems/GroupSystem.gd"
 Biomes="*res://systems/BiomeSystem.gd"
 Stats="*res://systems/StatsSystem.gd"
-PlayerControl="*res://systems/PlayerControlSystem.gd"
+Augur="*res://addons/augur/augur.gd"
+Analytics="*res://systems/AnalyticsSystem.gd"
 
 [display]
 

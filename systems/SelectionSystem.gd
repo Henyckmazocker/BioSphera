@@ -15,6 +15,9 @@ var current: Sphere = null
 ## Grupo resaltado desde el gráfico de grupos (-1 = ninguno). Lo consume el
 ## overlay `GroupHighlight` para marcar a los miembros del grupo en el plano.
 var highlighted_group_id: int = -1
+## Esfera bajo el cursor (null = ninguna). La escribe `CameraRig` al mover el ratón y
+## la lee el halo de estado en modo hover. Estado de UI: no va a la partida guardada.
+var hovered: Sphere = null
 
 
 func select(sphere: Sphere) -> void:

@@ -7,6 +7,12 @@ extends Node3D
 ##
 ## Ver docs: docs/GDD/Mecánicas.md (plantas) y docs/GDD/Mundo y Niveles.md.
 
+## Se emite justo tras restaurar un save (rama de carga de `_on_terrain_ready`), antes
+## de cualquier tick posterior: quien quiera comparar el estado recién cargado (el
+## arnés `tools/save_load_test.gd`) debe hacerlo en este callback, de forma síncrona.
+## `node_of` = nodos restaurados por índice de save (ver `SaveGame.restore`).
+signal save_restored(node_of: Array)
+
 const SPHERE_SCENE: PackedScene = preload("res://entities/Sphere.tscn")
 const PLANT_SCENE: PackedScene = preload("res://entities/Plant.tscn")
 const TREE_SCENE: PackedScene = preload("res://entities/Tree.tscn")
@@ -58,6 +64,9 @@ var apex_species: StringName = &"A"
 var population_size_max: float = Traits.SIZE_MAX
 
 var _rng: RandomNumberGenerator
+## true cuando el mundo ya está sembrado o restaurado (final de `_on_terrain_ready`).
+## Antes no se guarda: la foto sería un mundo vacío y pisaría `auto.sav` (ver `World.save_game`).
+var populated: bool = false
 var _seed_timer: float = 0.0
 var _resource_timer: float = 0.0   # rescate LENTO de yacimientos finitos (piedra/oro)
 
@@ -104,10 +113,20 @@ func _on_terrain_ready() -> void:
 	var world := get_parent() as World
 	if world != null:
 		await world.await_nav_ready()
-	_spawn_initial_plants()
-	_spawn_initial_resources()
-	_spawn_initial_population()
+	# Rama de carga: si hay un save pendiente (ver `SimConfig.pending_save`), se
+	# restaura en lugar de sembrar el mundo inicial: el save trae todas las entidades
+	# (esferas, plantas, árboles, yacimientos, granjas y cadáveres) y los temporizadores
+	# de rescate de este Spawner, así que aquí no se siembra nada.
+	if not SimConfig.pending_save.is_empty():
+		var node_of: Array = SaveGame.restore(self, SimConfig.pending_save)
+		SimConfig.pending_save = {}
+		save_restored.emit(node_of)
+	else:
+		_spawn_initial_plants()
+		_spawn_initial_resources()
+		_spawn_initial_population()
 	SimulationClock.tick.connect(_on_tick)
+	populated = true
 
 
 func _spawn_initial_population() -> void:
@@ -121,9 +140,6 @@ func _spawn_initial_population() -> void:
 	for i in initial_population_per_species:
 		_spawn_sphere(&"A", side_a)
 		_spawn_sphere(&"B", side_b)
-	# Modo control: una esfera extra que el jugador controla desde el arranque.
-	if SimConfig.start_controlled:
-		_spawn_controlled_sphere(SimConfig.start_controlled_species)
 
 
 func _spawn_initial_plants() -> void:
@@ -250,9 +266,12 @@ func _on_tick(dt_sim: float) -> void:
 	_seed_timer = 0.0
 	var parent: Node = _resolve_parent(plants_parent_path)
 	var current: int = parent.get_child_count()
-	if current >= min_plant_seeds:
+	# El suelo escala con la polinización de los eventos (una sequía no se tapa con
+	# el rescate), pero no sube con la abundancia: el tope es `plants_total_max`.
+	var min_seeds: int = int(min_plant_seeds * Climate.food_supply_scale())
+	if current >= min_seeds:
 		return
-	for i in (min_plant_seeds - current):
+	for i in (min_seeds - current):
 		_spawn_plant(false)
 
 
@@ -285,22 +304,6 @@ func _spawn_sphere(species: StringName, x_side: int = 0, size_override: float = 
 		genome["bravery"] = maxf(float(genome.get("bravery", 0.5)), 0.85)
 	sphere.setup(genome, world_bounds, 1)
 	sphere.activate()
-
-
-## Crea una esfera centrada y la entrega a `PlayerControl` para que el jugador la
-## controle en 3ª persona desde el arranque (modo control activado en la pantalla de
-## inicio). Mismo patrón de spawn que `_spawn_sphere`: instanciar → posicionar →
-## setup → activate, y POR ÚLTIMO tomar el control.
-func _spawn_controlled_sphere(species: StringName) -> void:
-	var sphere: Sphere = SPHERE_SCENE.instantiate()
-	var parent: Node = _resolve_parent(spheres_parent_path)
-	parent.add_child(sphere)
-	var pos := Vector3(0.0, 0.0, 0.0)
-	pos.y = _terrain_height(pos.x, pos.z) + 0.5
-	sphere.global_position = pos
-	sphere.setup(Traits.random_genome(_rng, species), world_bounds, 1)
-	sphere.activate()
-	PlayerControl.take_control(sphere)
 
 
 func _spawn_plant(start_mature: bool) -> void:

@@ -42,3 +42,12 @@ extends Resource
 @export var apex_species: StringName = &"A"
 ## Cap de tamaño para el resto de la población (Traits.SIZE_MAX = 3.0 = sin cap).
 @export var population_size_max: float = 3.0
+
+# --- Eventos del entorno aleatorios (ver `Climate`, tirada diaria) ---
+## Media de eventos aleatorios por año. 0 = ninguno (todos los presets salvo
+## «Mundo en colapso»). Parámetro vivo: el panel de eventos (V) lo cambia en partida.
+@export_range(0.0, 12.0, 0.5) var random_events_per_year: float = 0.0
+## Eventos que puede sacar la tirada. Vacío = ninguno, aunque el ritmo sea > 0.
+@export var random_event_pool: Array[EnvironmentEvent] = []
+## Intensidad de cada evento aleatorio, uniforme entre `x` e `y`.
+@export var random_intensity_range: Vector2 = Vector2(0.3, 0.7)

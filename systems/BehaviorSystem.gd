@@ -102,7 +102,7 @@ static func is_feasible(action: int, ctx: Dictionary) -> bool:
 			return true  # siempre se puede ir a buscar comida
 		Action.SEEK_MATE:
 			return bool(ctx.get("mate_in_sight", false)) \
-				and not bool(ctx.get("repro_on_cooldown", false))
+				and not bool(ctx.get("repro_blocked", false))
 		Action.FLEE:
 			# Factibilidad = EXISTE una amenaza, no que su presión supere un
 			# umbral. La presión es una magnitud continua que oscila en torno
@@ -218,17 +218,24 @@ static func _utility_fight(ctx: Dictionary, tuning: SimTuning) -> float:
 	# a los intrusos (GDD → territorialidad). Como los bonos de apoyo/hostilidad,
 	# puede elevar el tope de fight de forma modesta. El arrojo defensivo escala
 	# con `terr_defense` (territorialidad + valentía; ver _territory_defense_mult).
-	bonus += float(ctx.get("territory_ownership", 0.0)) * tuning.territory_defense_bonus \
+	bonus += float(ctx.get("target_territory_ownership", 0.0)) * tuning.territory_defense_bonus \
 		* _territory_defense_mult(ctx)
+	# Defensa de crías: adulto en su nido con crías propias dentro. `nest_guard` ya
+	# exige objetivo de otro grupo (rival o solitario; ver Sphere). Mismo tope que la
+	# defensa territorial.
+	if bool(ctx.get("nest_guard", false)):
+		bonus += tuning.nest_defense_bonus
 	if bool(ctx.get("contesting_food", false)):
 		# Disputar un alimento es un motivo de combate de primer orden — la
 		# comida es el motor del conflicto (GDD). Se permite superar el tope
 		# normal para que la esfera luche por el recurso en vez de cederlo
 		# implícitamente al perder la utilidad frente a seek_food.
 		return clampf(raw + 0.25 + bonus, 0.0, 0.95)
-	# Con apoyo/hostilidad el tope sube de FIGHT_MAX (0.7) hasta ≈0.95, pero sigue
-	# por debajo de huir/comer en máximo (1.0): sobrevivir aún manda.
-	return clampf(raw + bonus, 0.0, 0.95)
+	# Tope FIGHT_MAX (0.7) sin bonus; el apoyo/hostilidad/defensa lo sube de forma
+	# continua (min(0.7 + bonus, 0.95)), siempre por debajo de huir/comer en máximo
+	# (1.0): sobrevivir aún manda. Antes clampaba a 0.95 también sin bonus y el
+	# combate competía de tú a tú con seek_food/flee.
+	return clampf(raw + bonus, 0.0, minf(FIGHT_MAX + bonus, 0.95))
 
 
 ## Multiplicador de la respuesta DEFENSIVA territorial (arrojo en zona propia,

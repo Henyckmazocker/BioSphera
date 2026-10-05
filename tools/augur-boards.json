@@ -1,0 +1,355 @@
+{
+  "_comment": "Tableros de Augur que sube tools/augur-setup.sh (Plan «Integración con Augur», M4). Cada gráfica es {title, definition, note?} con la ChartDefinition v1 de Augur. El script busca el tablero por nombre (sin distinguir mayúsculas) y la gráfica por título: cambiar un título crea una gráfica nueva y deja la vieja. Todas comparan etapas de medición con series por run_label (BIOSPHERA_RUN_LABEL). Las medias de day_summary incluyen el día `partial` del cierre.",
+  "boards": [
+    {
+      "name": "Fidelidad",
+      "charts": [
+        {
+          "title": "Días medidos por etapa",
+          "note": "Cuántos day_summary hay por run_label: sirve de n para leer el resto. 40 por partida de un año.",
+          "definition": {
+            "v": 1,
+            "source": "event",
+            "metric": "count",
+            "event": "day_summary",
+            "x": {
+              "kind": "prop",
+              "prop": "run_label"
+            },
+            "display": "bar"
+          }
+        },
+        {
+          "title": "Población A por día",
+          "definition": {
+            "v": 1,
+            "source": "event",
+            "metric": "avg",
+            "event": "day_summary",
+            "property": "pop_A",
+            "where": [
+              {
+                "prop": "preset",
+                "op": "eq",
+                "value": "Dos tribus"
+              }
+            ],
+            "x": {
+              "kind": "prop",
+              "prop": "day"
+            },
+            "series": {
+              "kind": "prop",
+              "prop": "run_label"
+            },
+            "display": "line"
+          }
+        },
+        {
+          "title": "Población B por día",
+          "definition": {
+            "v": 1,
+            "source": "event",
+            "metric": "avg",
+            "event": "day_summary",
+            "property": "pop_B",
+            "where": [
+              {
+                "prop": "preset",
+                "op": "eq",
+                "value": "Dos tribus"
+              }
+            ],
+            "x": {
+              "kind": "prop",
+              "prop": "day"
+            },
+            "series": {
+              "kind": "prop",
+              "prop": "run_label"
+            },
+            "display": "line"
+          }
+        },
+        {
+          "title": "Nacimientos A por día",
+          "definition": {
+            "v": 1,
+            "source": "event",
+            "metric": "avg",
+            "event": "day_summary",
+            "property": "births_A",
+            "where": [
+              {
+                "prop": "preset",
+                "op": "eq",
+                "value": "Dos tribus"
+              }
+            ],
+            "x": {
+              "kind": "prop",
+              "prop": "day"
+            },
+            "series": {
+              "kind": "prop",
+              "prop": "run_label"
+            },
+            "display": "line"
+          }
+        },
+        {
+          "title": "Nacimientos B por día",
+          "definition": {
+            "v": 1,
+            "source": "event",
+            "metric": "avg",
+            "event": "day_summary",
+            "property": "births_B",
+            "where": [
+              {
+                "prop": "preset",
+                "op": "eq",
+                "value": "Dos tribus"
+              }
+            ],
+            "x": {
+              "kind": "prop",
+              "prop": "day"
+            },
+            "series": {
+              "kind": "prop",
+              "prop": "run_label"
+            },
+            "display": "line"
+          }
+        },
+        {
+          "title": "Muertes por hambre A (media diaria)",
+          "definition": {
+            "v": 1,
+            "source": "event",
+            "metric": "avg",
+            "event": "day_summary",
+            "property": "deaths_hunger_A",
+            "where": [
+              {
+                "prop": "preset",
+                "op": "eq",
+                "value": "Dos tribus"
+              }
+            ],
+            "x": {
+              "kind": "prop",
+              "prop": "run_label"
+            },
+            "display": "bar"
+          }
+        },
+        {
+          "title": "Muertes por hambre B (media diaria)",
+          "definition": {
+            "v": 1,
+            "source": "event",
+            "metric": "avg",
+            "event": "day_summary",
+            "property": "deaths_hunger_B",
+            "where": [
+              {
+                "prop": "preset",
+                "op": "eq",
+                "value": "Dos tribus"
+              }
+            ],
+            "x": {
+              "kind": "prop",
+              "prop": "run_label"
+            },
+            "display": "bar"
+          }
+        },
+        {
+          "title": "Muertes en combate A (media diaria)",
+          "definition": {
+            "v": 1,
+            "source": "event",
+            "metric": "avg",
+            "event": "day_summary",
+            "property": "deaths_combat_A",
+            "where": [
+              {
+                "prop": "preset",
+                "op": "eq",
+                "value": "Dos tribus"
+              }
+            ],
+            "x": {
+              "kind": "prop",
+              "prop": "run_label"
+            },
+            "display": "bar"
+          }
+        },
+        {
+          "title": "Muertes en combate B (media diaria)",
+          "definition": {
+            "v": 1,
+            "source": "event",
+            "metric": "avg",
+            "event": "day_summary",
+            "property": "deaths_combat_B",
+            "where": [
+              {
+                "prop": "preset",
+                "op": "eq",
+                "value": "Dos tribus"
+              }
+            ],
+            "x": {
+              "kind": "prop",
+              "prop": "run_label"
+            },
+            "display": "bar"
+          }
+        },
+        {
+          "title": "Muertes por vejez A (media diaria)",
+          "definition": {
+            "v": 1,
+            "source": "event",
+            "metric": "avg",
+            "event": "day_summary",
+            "property": "deaths_old_age_A",
+            "where": [
+              {
+                "prop": "preset",
+                "op": "eq",
+                "value": "Dos tribus"
+              }
+            ],
+            "x": {
+              "kind": "prop",
+              "prop": "run_label"
+            },
+            "display": "bar"
+          }
+        },
+        {
+          "title": "Muertes por vejez B (media diaria)",
+          "definition": {
+            "v": 1,
+            "source": "event",
+            "metric": "avg",
+            "event": "day_summary",
+            "property": "deaths_old_age_B",
+            "where": [
+              {
+                "prop": "preset",
+                "op": "eq",
+                "value": "Dos tribus"
+              }
+            ],
+            "x": {
+              "kind": "prop",
+              "prop": "run_label"
+            },
+            "display": "bar"
+          }
+        },
+        {
+          "title": "Combates iniciados por día",
+          "note": "Transiciones a fight. Con la histéresis, lo que mueve el tope de fight (M1 de Fidelidad) se ve aquí, no en los combates activos.",
+          "definition": {
+            "v": 1,
+            "source": "event",
+            "metric": "avg",
+            "event": "day_summary",
+            "property": "fights_started",
+            "where": [
+              {
+                "prop": "preset",
+                "op": "eq",
+                "value": "Dos tribus"
+              }
+            ],
+            "x": {
+              "kind": "prop",
+              "prop": "day"
+            },
+            "series": {
+              "kind": "prop",
+              "prop": "run_label"
+            },
+            "display": "line"
+          }
+        },
+        {
+          "title": "Nidos vivos por día",
+          "note": "Nidos con dueño al cierre del día (los huérfanos que se hunden no cuentan). Plan «Nidos y Asentamientos», M4.",
+          "definition": {
+            "v": 1,
+            "source": "event",
+            "metric": "avg",
+            "event": "day_summary",
+            "property": "nests",
+            "where": [
+              {
+                "prop": "preset",
+                "op": "eq",
+                "value": "Dos tribus"
+              }
+            ],
+            "x": {
+              "kind": "prop",
+              "prop": "day"
+            },
+            "series": {
+              "kind": "prop",
+              "prop": "run_label"
+            },
+            "display": "line"
+          }
+        },
+        {
+          "title": "σ de mutación media por bioma",
+          "note": "Vacía hasta el M0 de Fidelidad, que enriquece birth con biome y sigma. Tras M3 de Fidelidad debe ordenar desierto > frío > llanura = bosque.",
+          "definition": {
+            "v": 1,
+            "source": "event",
+            "metric": "avg",
+            "event": "birth_biome",
+            "property": "sigma_avg",
+            "x": {
+              "kind": "prop",
+              "prop": "biome"
+            },
+            "series": {
+              "kind": "prop",
+              "prop": "run_label"
+            },
+            "display": "bar"
+          }
+        },
+        {
+          "title": "Varianza de tamaño de los nacidos por bioma",
+          "note": "Vacía hasta el M0 de Fidelidad. Es la deriva: tras M3 de Fidelidad, desierto y frío por encima de llanura.",
+          "definition": {
+            "v": 1,
+            "source": "event",
+            "metric": "avg",
+            "event": "birth_biome",
+            "property": "size_var",
+            "x": {
+              "kind": "prop",
+              "prop": "biome"
+            },
+            "series": {
+              "kind": "prop",
+              "prop": "run_label"
+            },
+            "display": "bar"
+          }
+        }
+      ]
+    }
+  ]
+}

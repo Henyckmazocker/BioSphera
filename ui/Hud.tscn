@@ -65,8 +65,18 @@ custom_minimum_size = Vector2(36, 0)
 unique_name_in_owner = true
 text = ""
 
+[node name="EventLabel" type="Label" parent="Root/TopBar/HBox"]
+unique_name_in_owner = true
+text = ""
+
 [node name="Spacer6" type="Control" parent="Root/TopBar/HBox"]
 custom_minimum_size = Vector2(24, 0)
+
+[node name="SaveButton" type="Button" parent="Root/TopBar/HBox"]
+unique_name_in_owner = true
+focus_mode = 0
+text = "Guardar (F5)"
+tooltip_text = "Guardar la partida en la ranura manual (F5)"
 
 [node name="NavMeshButton" type="Button" parent="Root/TopBar/HBox"]
 unique_name_in_owner = true
@@ -79,19 +89,6 @@ unique_name_in_owner = true
 toggle_mode = true
 text = "Territorio (O)"
 tooltip_text = "Mapa de dominancia territorial: apagado → especie → grupo (O)"
-
-[node name="Spacer7" type="Control" parent="Root/TopBar/HBox"]
-custom_minimum_size = Vector2(24, 0)
-
-[node name="ControlButton" type="Button" parent="Root/TopBar/HBox"]
-unique_name_in_owner = true
-text = "Tomar control"
-tooltip_text = "Controlar en 3ª persona la esfera seleccionada (o el líder del grupo marcado)"
-
-[node name="ControlLabel" type="Label" parent="Root/TopBar/HBox"]
-unique_name_in_owner = true
-text = ""
-modulate = Color(0.95, 0.85, 0.5, 1)
 
  [node name="ParamsPanel" type="PanelContainer" parent="Root"]
  script = ExtResource("3_params_script")
@@ -251,6 +248,47 @@ unique_name_in_owner = true
 text = "12"
 custom_minimum_size = Vector2(60, 0)
 
+[node name="VisualSeparator" type="HSeparator" parent="Root/ParamsPanel/Margin/VBox"]
+
+[node name="VisualTitle" type="Label" parent="Root/ParamsPanel/Margin/VBox"]
+text = "Visual"
+
+[node name="Effects" type="HBoxContainer" parent="Root/ParamsPanel/Margin/VBox"]
+
+[node name="Label" type="Label" parent="Root/ParamsPanel/Margin/VBox/Effects"]
+text = "Efectos"
+custom_minimum_size = Vector2(160, 0)
+
+[node name="EffectsOption" type="OptionButton" parent="Root/ParamsPanel/Margin/VBox/Effects"]
+unique_name_in_owner = true
+size_flags_horizontal = 3
+item_count = 4
+popup/item_0/text = "Apagado"
+popup/item_0/id = 0
+popup/item_1/text = "Bajo"
+popup/item_1/id = 1
+popup/item_2/text = "Medio"
+popup/item_2/id = 2
+popup/item_3/text = "Alto"
+popup/item_3/id = 3
+
+[node name="Halo" type="HBoxContainer" parent="Root/ParamsPanel/Margin/VBox"]
+
+[node name="Label" type="Label" parent="Root/ParamsPanel/Margin/VBox/Halo"]
+text = "Halo de estado"
+custom_minimum_size = Vector2(160, 0)
+
+[node name="HaloOption" type="OptionButton" parent="Root/ParamsPanel/Margin/VBox/Halo"]
+unique_name_in_owner = true
+size_flags_horizontal = 3
+item_count = 3
+popup/item_0/text = "Siempre"
+popup/item_0/id = 0
+popup/item_1/text = "Al pasar el ratón"
+popup/item_1/id = 1
+popup/item_2/text = "Nunca"
+popup/item_2/id = 2
+
  [node name="HelpPanel" type="PanelContainer" parent="Root"]
  script = ExtResource("4_help_script")
 unique_name_in_owner = true
@@ -283,11 +321,13 @@ text = "Espacio    pausa
 P          panel de parámetros globales
 S          panel de modificadores por especie
 T          panel de estadísticas
+V          eventos del entorno
 E          modo experimentación (dios)
 H          ocultar / mostrar toda la UI
 K          ocultar / mostrar esta ayuda
 N          navmesh (debug)
 O          territorio (especie / grupo)
+F5         guardar partida
 
 Click izq  seleccionar esfera
 F          enfocar selección
@@ -295,12 +335,22 @@ WASD       paneo cámara
 Click med  paneo arrastrando
 Click der  orbitar
 Rueda      zoom
-R          reset cámara
-
-Modo control (botón 'Tomar control'):
-WASD mover · ratón mirar · Shift correr
-Clic atacar · E interactuar · Esc salir"
+R          reset cámara"
 modulate = Color(1, 1, 1, 0.85)
+
+[node name="SaveNoticeLabel" type="Label" parent="Root"]
+unique_name_in_owner = true
+visible = false
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -260.0
+offset_top = 52.0
+offset_right = 260.0
+offset_bottom = 80.0
+grow_horizontal = 2
+mouse_filter = 2
+text = ""
+horizontal_alignment = 1
 
 [node name="InspectPanel" type="PanelContainer" parent="Root"]
 unique_name_in_owner = true

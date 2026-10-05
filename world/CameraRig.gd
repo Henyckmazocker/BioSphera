@@ -27,6 +27,10 @@ var _orbiting: bool = false
 var _panning: bool = false
 var _left_press_pos: Vector2 = Vector2.ZERO
 var _left_dragging: bool = false
+## Hover para el halo de estado: última posición del ratón y si se movió desde el
+## último `_process` (la búsqueda O(n) solo se hace entonces).
+var _mouse_pos: Vector2 = Vector2.ZERO
+var _mouse_moved: bool = false
 
 ## Seguimiento de cámara. El pivote (`global_position`) persigue al objetivo con un
 ## lerp frame-rate-independiente. GROUP sigue el centroide cacheado del grupo.
@@ -35,14 +39,6 @@ var _follow_mode: int = FollowMode.NONE
 var _follow_group_id: int = -1
 ## Rigidez del seguimiento: mayor = la cámara se pega más rápido al objetivo.
 const FOLLOW_SMOOTH: float = 8.0
-
-## Modo control (3ª persona): la cámara orbita pegada a la esfera poseída con
-## mouse-look. Distancia corta, leve picado y un pivote algo elevado para encuadrar
-## al humanoide. Ver `PlayerControl` y docs/GDD/UI - UX.md (sección "Modo control").
-const THIRD_PERSON_DISTANCE: float = 6.0
-const THIRD_PERSON_HEIGHT: float = 1.2
-const THIRD_PERSON_PITCH: float = -0.35   # radianes (~-20°), ligeramente picado
-var _third_person: bool = false
 
 
 func _ready() -> void:
@@ -54,22 +50,11 @@ func _ready() -> void:
 	# Seguir automáticamente al seleccionar una esfera o marcar un grupo.
 	Selection.selected_changed.connect(_on_selection_changed)
 	Selection.group_highlight_changed.connect(_on_group_highlight_changed)
-	# Entrar/salir de 3ª persona al tomar/soltar el control de una esfera.
-	PlayerControl.control_started.connect(_on_control_started)
-	PlayerControl.control_ended.connect(_on_control_ended)
+	# Al salir el ratón de la ventana no hay nada bajo el cursor.
+	get_window().mouse_exited.connect(_on_mouse_exited)
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	# 3ª persona: el movimiento de ratón mira alrededor (mouse-look, sin botón);
-	# el resto de controles de observador (pan/órbita/picking/R/F) quedan inertes.
-	# El movimiento del pawn y `Esc` los gestiona `PlayerController`.
-	if _third_person:
-		if event is InputEventMouseMotion:
-			var mm: InputEventMouseMotion = event
-			_yaw.rotate_y(-mm.relative.x * orbit_speed)
-			_pitch.rotate_x(-mm.relative.y * orbit_speed)
-			_pitch.rotation.x = clampf(_pitch.rotation.x, -PI * 0.49, PI * 0.49)
-		return
 	if event is InputEventMouseButton:
 		var mb: InputEventMouseButton = event
 		if mb.button_index == MOUSE_BUTTON_RIGHT:
@@ -89,6 +74,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			_zoom(zoom_speed)
 	elif event is InputEventMouseMotion:
 		var mm: InputEventMouseMotion = event
+		_mouse_pos = mm.position
+		_mouse_moved = true
 		if _orbiting:
 			_yaw.rotate_y(-mm.relative.x * orbit_speed)
 			_pitch.rotate_x(-mm.relative.y * orbit_speed)
@@ -108,16 +95,7 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _process(delta: float) -> void:
-	# 3ª persona: el pivote persigue a la esfera poseída (WASD lo consume el
-	# `PlayerController` para mover el pawn, no para panear). El yaw/pitch los fija
-	# el mouse-look; aquí solo seguimos la posición.
-	if _third_person:
-		var pawn: Sphere = PlayerControl.pawn
-		if pawn != null and is_instance_valid(pawn):
-			var target: Vector3 = pawn.global_position + Vector3(0.0, THIRD_PERSON_HEIGHT, 0.0)
-			var t: float = 1.0 - exp(-delta * FOLLOW_SMOOTH)
-			global_position = global_position.lerp(target, t)
-		return
+	_update_hover()
 	# WASD paneo en plano XZ relativo al yaw actual.
 	var dir: Vector3 = Vector3.ZERO
 	if Input.is_key_pressed(KEY_W):
@@ -179,9 +157,17 @@ func _apply_top_down_reset() -> void:
 
 
 func _pick_at(screen_pos: Vector2) -> void:
-	## Picking sin físicas: proyecta cada esfera al screen y elige la más
-	## cercana al cursor dentro de un umbral (escalado por su tamaño y
-	## el zoom).
+	var best: Sphere = _sphere_at(screen_pos)
+	if best != null:
+		Selection.select(best)
+	else:
+		Selection.clear()
+
+
+## Picking sin físicas: proyecta cada esfera al screen y devuelve la más cercana a
+## `screen_pos` dentro de un umbral (escalado por su tamaño y el zoom), o null. La
+## usan el clic (`_pick_at`) y el hover del halo (`_update_hover`).
+func _sphere_at(screen_pos: Vector2) -> Sphere:
 	var spheres: Array = get_tree().get_nodes_in_group(&"spheres")
 	var best: Sphere = null
 	var best_score: float = 9999.0
@@ -199,10 +185,23 @@ func _pick_at(screen_pos: Vector2) -> void:
 		if score < best_score:
 			best_score = score
 			best = s
-	if best != null:
-		Selection.select(best)
-	else:
-		Selection.clear()
+	return best
+
+
+## Escribe `Selection.hovered` con la esfera bajo el cursor, solo si el ratón se movió.
+## Una esfera muerta deja de estar en hover.
+func _update_hover() -> void:
+	if Selection.hovered != null and not is_instance_valid(Selection.hovered):
+		Selection.hovered = null
+	if not _mouse_moved:
+		return
+	_mouse_moved = false
+	Selection.hovered = _sphere_at(_mouse_pos)
+
+
+func _on_mouse_exited() -> void:
+	_mouse_moved = false
+	Selection.hovered = null
 
 
 func _screen_radius_for(sphere: Sphere) -> float:
@@ -266,24 +265,3 @@ func _follow_target_pos():
 func _cancel_follow() -> void:
 	_follow_mode = FollowMode.NONE
 	_follow_group_id = -1
-
-
-## Entra en 3ª persona al tomar el control de `sphere`: captura el ratón (mouse-look),
-## acerca la cámara y la sitúa tras el pawn con un leve picado.
-func _on_control_started(sphere) -> void:
-	_cancel_follow()
-	_third_person = true
-	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-	_distance = THIRD_PERSON_DISTANCE
-	_camera.position = Vector3(0.0, 0.0, _distance)
-	_pitch.rotation = Vector3(THIRD_PERSON_PITCH, 0.0, 0.0)
-	if sphere != null and is_instance_valid(sphere):
-		global_position = sphere.global_position + Vector3(0.0, THIRD_PERSON_HEIGHT, 0.0)
-
-
-## Sale de 3ª persona al soltar el control: libera el ratón y vuelve a la vista cenital
-## de observador.
-func _on_control_ended() -> void:
-	_third_person = false
-	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	_apply_top_down_reset()

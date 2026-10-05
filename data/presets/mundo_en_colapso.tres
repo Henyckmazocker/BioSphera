@@ -1,0 +1,25 @@
+[gd_resource type="Resource" script_class="SimPreset" load_steps=7 format=3]
+
+[ext_resource type="Script" path="res://data/sim_preset.gd" id="1_preset"]
+[ext_resource type="Script" path="res://data/environment_event.gd" id="2_event"]
+[ext_resource type="Resource" path="res://data/events/sequia.tres" id="3_sequia"]
+[ext_resource type="Resource" path="res://data/events/ola_de_frio.tres" id="4_frio"]
+[ext_resource type="Resource" path="res://data/events/tormenta.tres" id="5_tormenta"]
+[ext_resource type="Resource" path="res://data/events/plaga.tres" id="6_plaga"]
+
+[resource]
+script = ExtResource("1_preset")
+id = &"mundo_en_colapso"
+display_name = "Mundo en colapso"
+description = "Supervivencia: el mundo de Génesis castigado por sequías, olas de frío, tormentas y plagas al azar, unas seis al año. Solo los linajes que aguanten llevarán la marca de lo vivido."
+world_size = 60.0
+initial_plants = 250
+initial_population_per_species = 5
+min_plant_seeds = 120
+biome_seed = 1
+food_respawn_per_second = 10.0
+target_food = 250
+mutation_base_rate = 0.03
+random_events_per_year = 6.0
+random_event_pool = Array[ExtResource("2_event")]([ExtResource("3_sequia"), ExtResource("4_frio"), ExtResource("5_tormenta"), ExtResource("6_plaga")])
+random_intensity_range = Vector2(0.3, 0.7)

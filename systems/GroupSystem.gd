@@ -29,13 +29,39 @@ const FARM_SCENE: PackedScene = preload("res://entities/Farm.tscn")
 # Tuning de grupos centralizado en SimTuning (GlobalParams.tuning).
 
 var _groups: Dictionary = {}  # id -> {members:Array[Sphere], leader_id:int, goal:Goal, target_pos:Vector3, cooldown:float, cohesion:float, hungry_streak:int}
+# Caché (rendimiento) de `_effective_inter_affinity(g, other)` → `other.id -> float`
+# para la reevaluación del grupo `_inter_aff_cache_gid`. `_evaluate_war` la llena y
+# `_process_intergroup` la reutiliza para los mismos pares en vez de repetir la
+# media O(|g|·|other|) de afinidades. Solo es válida mientras nada que la afinidad
+# efectiva lea haya cambiado entre ambas (ver `_process_intergroup`).
+var _inter_aff_cache: Dictionary = {}
+var _inter_aff_cache_gid: int = -1
 var _rng: RandomNumberGenerator
+## Siguiente id de grupo. Contador propio, no el `instance_id` del fundador: así el id
+## es estable entre procesos y `Sphere.group_id`, `Farm.group_id`, `Plant.owner_group_id`,
+## `rivals`/`relations` y el territorio se guardan tal cual (ver `to_save`). Empieza en 1:
+## -1 es «sin grupo». Monótono: un id disuelto nunca se reutiliza.
+var _next_group_id: int = 1
+## Nidos: hogar de un grupo asentado (ver `_update_settlement`). Almacén propio y no
+## dentro del dict del grupo porque el nido sobrevive a su grupo mientras decae.
+## No es entidad tickeada: lo pinta `NestLayer` desde `get_nests`.
+## nest_id -> {id, group_id (-1 = huérfano), position (a ras de terreno), founded_tick,
+## last_tended_tick, orphaned_tick (-1 con dueño), color (copiado al fundar)}.
+var _nests: Dictionary = {}
+## Siguiente id de nido. Monótono, como `_next_group_id`.
+var _next_nest_id: int = 1
 
 
 func _ready() -> void:
 	_rng = RandomNumberGenerator.new()
 	_rng.randomize()
 	SimulationClock.tick.connect(_on_tick)
+
+
+## Reserva un id de grupo nuevo. Lo usa `Sphere._maybe_join_group` al fundar un grupo.
+func new_group_id() -> int:
+	_next_group_id += 1
+	return _next_group_id - 1
 
 
 func register_member(group_id: int, sphere) -> void:
@@ -62,7 +88,7 @@ func unregister_member(group_id: int, sphere) -> void:
 	var g: Dictionary = _groups[group_id]
 	g.members.erase(sphere)
 	if g.members.size() <= 1:
-		_groups.erase(group_id)
+		_retire_group(group_id, "depopulated")
 
 
 func get_target_pos(group_id: int) -> Vector3:
@@ -201,6 +227,9 @@ func _make_group(id: int) -> Dictionary:
 		"relations": {},        # other_group_id -> afinidad de grupo [-100,100] (libro propio)
 		"war_target_gid": -1,   # grupo enemigo objetivo en INVADE (-1 = ninguno)
 		"war_leader": false,    # ¿el objetivo de guerra apunta al LÍDER enemigo? (extrema)
+		"nest_id": -1,          # nido del grupo en `_nests` (-1 = nómada)
+		"settle_ticks": 0,      # ticks seguidos cumpliendo el criterio de arraigo
+		"farmed": false,        # ¿tuvo alguna granja? (puede haber plantas suyas aunque ya no)
 		"name": _generate_name(),
 		"color": _color_for_id(id),
 	}
@@ -300,7 +329,20 @@ func get_group_info(group_id: int) -> Dictionary:
 		"farms": _count_group_farms(group_id),
 		"war_target": get_group_name(int(g.get("war_target_gid", -1))),
 		"war_leader": bool(g.get("war_leader", false)),
+		"nest_day": _nest_day(int(g.get("nest_id", -1))),
 	}
+
+
+## Día de juego (`Climate.day_index`, base 0) en que se fundó el nido, o -1 si no
+## existe. Se deriva de `founded_tick` contra el reloj actual: así vale igual tras
+## cargar una partida, sin guardar nada nuevo.
+func _nest_day(nest_id: int) -> int:
+	var nest: Dictionary = _nests.get(nest_id, {})
+	if nest.is_empty():
+		return -1
+	var elapsed_s: float = float(SimulationClock.get_tick_count() - int(nest.founded_tick)) \
+		* SimulationClock.DT_SIM
+	return maxi(0, int((Climate.sim_time - elapsed_s) / GlobalParams.tuning.seconds_per_day))
 
 
 ## Nº de granjas pertenecientes al grupo (recorre el grupo de escena `&"farms"`).
@@ -422,6 +464,8 @@ func _on_tick(dt_sim: float) -> void:
 				dead_groups.append([gid, reason])
 				continue
 			_reevaluate_goal(g)
+			# Nido: fundación por arraigo sostenido y mantenimiento (al ritmo de reeval).
+			_update_settlement(g)
 			# Relaciones entre grupos: fusión con grupos afines o marca de
 			# rivalidad con hostiles cercanos. Si g es absorbido en una fusión,
 			# deja de existir y no seguimos tocándolo.
@@ -435,23 +479,64 @@ func _on_tick(dt_sim: float) -> void:
 		elif g.goal == Goal.INVADE:
 			_refresh_invade_target(g)
 		# Aunque no reevaluemos el goal, mantener target_pos actualizado
-		# para GATHER (centroide se mueve con el grupo).
+		# para GATHER (el centroide se mueve con el grupo; con nido y dentro de la
+		# correa, el destino es el nido).
 		elif g.goal == Goal.GATHER:
-			g.target_pos = g.centroid
+			g.target_pos = _gather_target(g, g.centroid)
 	for entry in dead_groups:
-		var gid: int = entry[0]
-		var dg: Dictionary = _groups.get(gid, {})
-		if dg.is_empty():
-			continue
-		EventLog.log_event(&"group_dissolved", {
-			"group_id": gid,
-			"name": dg.get("name", ""),
-			"reason": entry[1],
-			"cohesion": snappedf(float(dg.get("cohesion", 0.0)), 0.1),
-			"size": dg.members.size(),
-		}, &"groups")
-		_groups.erase(gid)
-		_purge_group_relations(gid)
+		_retire_group(int(entry[0]), String(entry[1]))
+	# Desvanecer nidos huérfanos al ritmo de reevaluación (hay pocos nidos). Por número
+	# de tick y no con un contador propio: no hay estado que guardar.
+	var reeval_ticks: int = maxi(1, int(round(GlobalParams.tuning.group_reeval_interval
+		* SimulationClock.TICKS_PER_SECOND)))
+	if SimulationClock.get_tick_count() % reeval_ticks == 0:
+		_fade_orphan_nests()
+
+
+## Retira un grupo: log, nido huérfano, reliquias y relaciones. Único camino de borrado
+## de un grupo (la fusión no retira: traspasa, ver `_merge_groups`). `group_dissolved`
+## se registra antes del `erase`: quien reaccione debe leer el payload, no el grupo.
+func _retire_group(gid: int, reason: String) -> void:
+	var g: Dictionary = _groups.get(gid, {})
+	if g.is_empty():
+		return
+	EventLog.log_event(&"group_dissolved", {
+		"group_id": gid,
+		"name": g.get("name", ""),
+		"reason": reason,
+		"cohesion": snappedf(float(g.get("cohesion", 0.0)), 0.1),
+		"size": g.members.size(),
+	}, &"groups")
+	_orphan_nest(g, "group_gone")
+	# Reliquias (#10): las granjas y sus plantas pasan a -1 (sin dueño). Una reliquia no
+	# proyecta territorio y comer de ella no es robo.
+	_transfer_holdings(gid, -1, bool(g.get("farmed", true)))
+	_groups.erase(gid)
+	_purge_group_relations(gid)
+	# El superviviente suelto (si queda) deja de apuntar al grupo ya, no en su próximo
+	# tick (`Sphere._on_tick` hace lo mismo): así ningún guardado ve un id colgante.
+	for m in g.members:
+		if is_instance_valid(m) and m.is_inside_tree() and not m.is_queued_for_deletion() \
+				and int(m.group_id) == gid:
+			m.group_id = -1
+			m._refresh_group_tag()
+
+
+## Pasa las granjas de `from_gid` y, si el grupo tuvo alguna (`farmed`), las plantas
+## que sembraron a `to_gid`: -1 al retirar el grupo, el absorbente en una fusión. Las
+## plantas con dueño solo las siembra `Farm`, así que sin granjas no se recorren (puede
+## haber cientos). `farmed` y no «tiene granjas ahora»: una granja arrasada deja sus
+## plantas con dueño (`Farm._destroy`).
+func _transfer_holdings(from_gid: int, to_gid: int, farmed: bool) -> void:
+	for f in get_tree().get_nodes_in_group(&"farms"):
+		if is_instance_valid(f) and int(f.group_id) == from_gid:
+			f.group_id = to_gid
+	if not farmed:
+		return
+	# `&"plants"` también incluye cadáveres (alimento): solo las `Plant` tienen dueño.
+	for p in get_tree().get_nodes_in_group(&"plants"):
+		if p is Plant and int(p.owner_group_id) == from_gid:
+			p.owner_group_id = to_gid
 
 
 func _prune_dead(g: Dictionary) -> void:
@@ -603,11 +688,13 @@ func leader_of(group_id: int):
 ## poderoso (admiración/atracción por el poder), proporcional a la diferencia de
 ## poder. Una sola dirección (el poderoso no "admira" de vuelta). Se ejecuta al
 ## ritmo de reevaluación, así que el nudge es modesto pero acumulativo.
+## Devuelve true si escribió en la memoria social (invalida la caché de afinidad
+## entre grupos: cada escritura puede además purgar recuerdos por capacidad).
 func _apply_power_affinity(g: Dictionary, other: Dictionary,
-		power_g: float, power_other: float, tuning: SimTuning) -> void:
+		power_g: float, power_other: float, tuning: SimTuning) -> bool:
 	var diff: float = power_g - power_other
 	if absf(diff) < 0.05:
-		return
+		return false
 	var delta: float = tuning.power_affinity_weight * absf(diff)
 	# Admiradores = miembros del grupo más débil; ídolos = del más fuerte.
 	var admirers: Array = other.members if diff > 0.0 else g.members
@@ -616,6 +703,7 @@ func _apply_power_affinity(g: Dictionary, other: Dictionary,
 		var aid: int = a.get_instance_id()
 		for idol in idols:
 			Relationships.adjust_one_way(aid, idol.get_instance_id(), delta)
+	return true
 
 
 # ---------------- RELACIONES ENTRE GRUPOS ----------------
@@ -726,13 +814,26 @@ func _process_intergroup(g: Dictionary) -> bool:
 	var tuning: SimTuning = GlobalParams.tuning
 	var rival_until: int = SimulationClock.get_tick_count() \
 		+ int(round(tuning.group_rival_ttl * SimulationClock.TICKS_PER_SECOND))
+	# La afinidad efectiva de cada par ya la calculó `_evaluate_war` en esta misma
+	# reevaluación, y entre medias nada la cambia: `_reevaluate_goal` no escribe en
+	# `Relationships` ni en miembros/libro de grupos tras `_evaluate_war` (el libro
+	# decae ANTES). Dentro de este bucle sí puede cambiar, así que la caché deja de
+	# valer para el resto de pares en cuanto (a) el poder escribe afinidades (que
+	# además pueden purgar recuerdos de otros pares por capacidad) o (b) `g`
+	# absorbe a otro grupo (cambian sus miembros). Mismos valores, menos cálculo.
+	var cache_valid: bool = _inter_aff_cache_gid == g.id
 	for ogid in _nearby_group_ids(g):
 		var other: Dictionary = _groups[ogid]
 		# Poder (oro de la bolsa): atrae a los demás y facilita absorciones.
 		var power_g: float = power(g.id)
 		var power_other: float = power(ogid)
-		_apply_power_affinity(g, other, power_g, power_other, tuning)
-		var aff: float = _effective_inter_affinity(g, other)
+		if _apply_power_affinity(g, other, power_g, power_other, tuning):
+			cache_valid = false
+		var aff: float
+		if cache_valid and _inter_aff_cache.has(ogid):
+			aff = float(_inter_aff_cache[ogid])
+		else:
+			aff = _effective_inter_affinity(g, other)
 		# Un grupo poderoso rebaja el umbral de fusión (absorbe pequeños más fácil).
 		var merge_th: float = _merge_threshold(g.members.size(), other.members.size(), tuning) \
 			* (1.0 - tuning.power_merge_bias * maxf(power_g, power_other))
@@ -742,8 +843,10 @@ func _process_intergroup(g: Dictionary) -> bool:
 				or (g.members.size() == other.members.size() and g.id < ogid)
 			if g_absorbs:
 				_merge_groups(g.id, ogid, aff)
+				cache_valid = false
 			else:
 				_merge_groups(ogid, g.id, aff)
+				_clear_inter_aff_cache()
 				return true   # g fue el absorbido
 		elif aff <= tuning.group_hostility_affinity:
 			# Rivalidad mutua con caducidad. Log solo al pasar de no-rival a rival.
@@ -756,7 +859,15 @@ func _process_intergroup(g: Dictionary) -> bool:
 					"a_name": g.get("name", ""), "b_name": other.get("name", ""),
 					"inter_affinity": snappedf(aff, 0.1),
 				}, &"groups")
+	_clear_inter_aff_cache()
 	return false
+
+
+## Vacía la caché de afinidad entre grupos al cerrar la reevaluación de un grupo:
+## nunca se reutiliza fuera del tramo `_evaluate_war` → `_process_intergroup`.
+func _clear_inter_aff_cache() -> void:
+	_inter_aff_cache.clear()
+	_inter_aff_cache_gid = -1
 
 
 ## Fusiona `from_id` dentro de `into_id`: reasigna los miembros del pequeño al
@@ -781,6 +892,12 @@ func _merge_groups(into_id: int, from_id: int, aff: float) -> void:
 		if not into.members.has(m):
 			into.members.append(m)
 		m._refresh_group_tag()   # recolorea al color del grupo absorbente
+	# Granjas y plantas del absorbido quedan como reliquia (-1), igual que al disolverse:
+	# traspasarlas al absorbente convertía en robo cada bocado ajeno y disparaba
+	# rivalidades y arrasamientos (bisección de M5). El absorbente conserva su nido; el
+	# del absorbido queda huérfano y decae.
+	_transfer_holdings(from_id, -1, bool(from.get("farmed", true)))
+	_orphan_nest(from, "merged")
 	_groups.erase(from_id)
 	_purge_group_relations(from_id)
 	EventLog.log_event(&"groups_merged", {
@@ -927,11 +1044,12 @@ func _reevaluate_goal(g: Dictionary) -> void:
 			g.build_started_tick = SimulationClock.get_tick_count()
 		g.goal = Goal.BUILD_FARM
 	else:
-		# Sin hambre apremiante: el grupo se mantiene cohesionado en su centroide.
+		# Sin hambre apremiante: el grupo se reúne en su nido (si lo tiene y está
+		# dentro de la correa) o se mantiene cohesionado en su centroide.
 		# El movimiento ocioso lo aportan los individuos vía `wander`.
 		g.goal = Goal.GATHER
 		g.forage_plant = null
-		g.target_pos = center
+		g.target_pos = _gather_target(g, center)
 
 	_log_goal_change_if_needed(g, prev_goal, avg_hunger)
 
@@ -960,8 +1078,11 @@ func _evaluate_war(g: Dictionary, _center: Vector3) -> Dictionary:
 	var tuning: SimTuning = GlobalParams.tuning
 	var worst_gid: int = -1
 	var worst_aff: float = 0.0
+	_inter_aff_cache.clear()
+	_inter_aff_cache_gid = g.id
 	for ogid in _nearby_group_ids(g):
 		var aff: float = _effective_inter_affinity(g, _groups[ogid])
+		_inter_aff_cache[ogid] = aff
 		if aff < worst_aff:
 			worst_aff = aff
 			worst_gid = ogid
@@ -1001,7 +1122,7 @@ func _refresh_invade_target(g: Dictionary) -> void:
 		g.goal = Goal.GATHER
 		g.war_target_gid = -1
 		g.war_leader = false
-		g.target_pos = g.centroid
+		g.target_pos = _gather_target(g, g.centroid)
 		return
 	if bool(g.get("war_leader", false)):
 		var leader = _leader_of(egid)
@@ -1128,7 +1249,7 @@ func _try_build_farm(g: Dictionary) -> void:
 	if pool_spend(g.id, costs):
 		_spawn_farm(g.id, g.target_pos, g.members[0].world_bounds)
 		g.goal = Goal.GATHER
-		g.target_pos = center
+		g.target_pos = _gather_target(g, center)
 		return
 	# Aún no hay material. Si la obra lleva demasiado tiempo sin completarse (no se
 	# logra juntar madera/piedra alcanzable), abandonar y fijar un cooldown para no
@@ -1138,7 +1259,7 @@ func _try_build_farm(g: Dictionary) -> void:
 	if now >= int(g.get("build_started_tick", 0)) + timeout_ticks:
 		g.farm_cooldown_until = now + timeout_ticks
 		g.goal = Goal.GATHER
-		g.target_pos = center
+		g.target_pos = _gather_target(g, center)
 
 
 func _spawn_farm(group_id: int, pos: Vector3, bounds: Vector2) -> void:
@@ -1148,6 +1269,8 @@ func _spawn_farm(group_id: int, pos: Vector3, bounds: Vector2) -> void:
 	var farm: Farm = FARM_SCENE.instantiate()
 	world.add_child(farm)
 	farm.group_id = group_id
+	if _groups.has(group_id):
+		_groups[group_id].farmed = true
 	farm.world_bounds = bounds
 	var ground_y: float = world.get_terrain_height(pos.x, pos.z)
 	farm.global_position = Vector3(pos.x, ground_y, pos.z)
@@ -1183,3 +1306,304 @@ func _nearest_mature_plant(center: Vector3, _leader, member_count: int = 1) -> N
 			best_d = d
 			best = p
 	return best
+
+
+# ---------------- NIDOS ----------------
+# Ver docs: docs/Planes/…/Plan - Nidos y Asentamientos.md. Ciclo de vida: fundar y
+# mantener (`_update_settlement`), abandonar o perder el grupo (`_orphan_nest`, desde
+# `_retire_group` y `_merge_groups`) y desvanecerse tras el decay (`_fade_orphan_nests`).
+# GATHER vuelve al nido, con correa (`_gather_target`).
+
+## Destino de GATHER. Con nido y el centroide a ≤ `nest_leash_radius` de él (en planta),
+## el nido: el grupo asentado y sin hambre vuelve a casa. Si no, `center`, como sin
+## nidos: la correa evita que un grupo que migró lejos cruce el mapa de vuelta al
+## saciarse (oscilaría MIGRATE↔GATHER). Único punto donde GATHER fija su destino.
+func _gather_target(g: Dictionary, center: Vector3) -> Vector3:
+	var nest: Dictionary = _nests.get(int(g.get("nest_id", -1)), {})
+	if nest.is_empty():
+		return center
+	var p: Vector3 = nest.position
+	var leash: float = GlobalParams.tuning.nest_leash_radius
+	if Vector2(center.x - p.x, center.z - p.z).length_squared() > leash * leash:
+		return center
+	return p
+
+
+## Posición del nido del grupo, o INF si el grupo no existe o no tiene nido.
+func get_nest_position(group_id: int) -> Vector3:
+	if not _groups.has(group_id):
+		return Vector3(INF, INF, INF)
+	var nest: Dictionary = _nests.get(int(_groups[group_id].get("nest_id", -1)), {})
+	if nest.is_empty():
+		return Vector3(INF, INF, INF)
+	return nest.position
+
+
+## Nº de nidos con dueño (los huérfanos que decaen no cuentan). Para `day_summary`.
+func count_owned_nests() -> int:
+	var n: int = 0
+	for nid in _nests:
+		if int(_nests[nid].group_id) != -1:
+			n += 1
+	return n
+
+
+## Nidos para el render (`NestLayer`): [{id, position, color, decay_01}]. `decay_01`
+## se calcula al consultar: 0 con dueño, avance del hundido si es huérfano.
+func get_nests() -> Array:
+	var out: Array = []
+	var now: int = SimulationClock.get_tick_count()
+	var decay_ticks: float = maxf(1.0, GlobalParams.tuning.nest_decay_days
+		* GlobalParams.tuning.seconds_per_day * SimulationClock.TICKS_PER_SECOND)
+	for nid in _nests:
+		var nest: Dictionary = _nests[nid]
+		var decay: float = 0.0
+		if int(nest.orphaned_tick) >= 0:
+			decay = clampf(float(now - int(nest.orphaned_tick)) / decay_ticks, 0.0, 1.0)
+		out.append({"id": nid, "position": nest.position, "color": nest.color, "decay_01": decay})
+	return out
+
+
+## Cría: aún no madura, con la misma madurez que `Sphere.can_reproduce` (fracción
+## `repro_maturity_01` de la longevidad heredada).
+func is_cub(sphere) -> bool:
+	return sphere.age / maxf(float(sphere.genome.get("longevity", 120.0)), 1.0) \
+		< GlobalParams.tuning.repro_maturity_01
+
+
+## Defensa de crías: adulto dentro de `nest_radius` del nido de su grupo con ≥1 cría
+## propia en él. Las crías se cuentan en `_update_settlement` (`cubs_in_radius`, al
+## ritmo de reevaluación), así que la consulta es O(1).
+func nest_guard(sphere) -> bool:
+	var gid: int = int(sphere.group_id)
+	if gid == -1 or not _groups.has(gid):
+		return false
+	var nest: Dictionary = _nests.get(int(_groups[gid].get("nest_id", -1)), {})
+	if nest.is_empty() or int(nest.get("cubs_in_radius", 0)) <= 0:
+		return false
+	if is_cub(sphere):
+		return false
+	var p: Vector3 = nest.position
+	var r: float = GlobalParams.tuning.nest_radius
+	return Vector2(sphere.global_position.x - p.x, sphere.global_position.z - p.z).length_squared() \
+		<= r * r
+
+
+## Ciclo de vida del nido al ritmo de reevaluación. Sin nido: acumula `settle_ticks`
+## mientras el grupo cumple el criterio de arraigo (tamaño, dominancia propia en el
+## centroide ≥ `farm_build_ownership_min` y territorialidad media ≥ 0.4, el mismo
+## umbral que `_should_build_farm`: un único concepto de «asentado»; además, ser el
+## grupo dominante de la celda, porque esa dominancia se satura con grupos solapados) y funda al llegar
+## a `nest_settle_days`. Cada fallo resta una reevaluación (histéresis con suelo en 0, no
+## reinicio): la dominancia del centroide parpadea y un solo parpadeo no debe tirar días de
+## arraigo. Con nido: lo marca como atendido si algún miembro está dentro de `nest_radius`
+## (y cuenta las crías que hay dentro, `cubs_in_radius`, para `nest_guard`),
+## y lo abandona (huérfano) si lleva más de `nest_abandon_days` sin atender.
+func _update_settlement(g: Dictionary) -> void:
+	var tuning: SimTuning = GlobalParams.tuning
+	var now: int = SimulationClock.get_tick_count()
+	var nest: Dictionary = _nests.get(int(g.nest_id), {})
+	if not nest.is_empty():
+		var r2: float = tuning.nest_radius * tuning.nest_radius
+		var p: Vector3 = nest.position
+		# Mismo bucle: mantenimiento y caché de crías en el radio para `nest_guard`
+		# (consulta O(1) por esfera). Volátil: no se guarda, se recalcula aquí.
+		var cubs: int = 0
+		for m in g.members:
+			if Vector2(m.global_position.x - p.x, m.global_position.z - p.z).length_squared() <= r2:
+				nest.last_tended_tick = now
+				if is_cub(m):
+					cubs += 1
+		nest.cubs_in_radius = cubs
+		# Abandono: nadie lo atiende en `nest_abandon_days` (el grupo migró o se quedó
+		# lejos, más allá de la correa). Queda huérfano y el grupo podrá arraigar de nuevo.
+		var abandon_ticks: float = tuning.nest_abandon_days * tuning.seconds_per_day \
+			* SimulationClock.TICKS_PER_SECOND
+		if float(now - int(nest.last_tended_tick)) > abandon_ticks:
+			_orphan_nest(g, "abandoned")
+		return
+	var reeval_ticks: int = int(round(tuning.group_reeval_interval * SimulationClock.TICKS_PER_SECOND))
+	if g.members.size() < tuning.nest_min_members \
+			or TerritorySystem.group_ownership_at(g.centroid, g.id) < tuning.farm_build_ownership_min \
+			or TerritorySystem.dominant_group_at(g.centroid) != int(g.id) \
+			or _avg_territoriality(g) < 0.4:
+		g.settle_ticks = maxi(0, int(g.settle_ticks) - reeval_ticks)
+		return
+	g.settle_ticks = int(g.settle_ticks) + reeval_ticks
+	var settle_ticks_needed: float = tuning.nest_settle_days * tuning.seconds_per_day \
+		* SimulationClock.TICKS_PER_SECOND
+	if float(g.settle_ticks) >= settle_ticks_needed:
+		_found_nest(g, now)
+
+
+## Funda el nido del grupo en su centroide, recortado a los límites del mundo como el
+## sitio de la granja y a ras de terreno.
+func _found_nest(g: Dictionary, now: int) -> void:
+	var pos: Vector3 = _pick_farm_site(g, g.centroid)
+	var world: World = get_tree().get_first_node_in_group("world") as World
+	if world != null:
+		pos.y = world.get_terrain_height(pos.x, pos.z)
+	var nid: int = _next_nest_id
+	_next_nest_id += 1
+	_nests[nid] = {
+		"id": nid,
+		"group_id": int(g.id),
+		"position": pos,
+		"founded_tick": now,
+		"last_tended_tick": now,
+		"orphaned_tick": -1,
+		"color": g.color,
+	}
+	g.nest_id = nid
+	g.settle_ticks = 0
+	EventLog.log_event(&"nest_founded", {
+		"nest_id": nid,
+		"group_id": int(g.id),
+		"name": g.get("name", ""),
+		"position": [pos.x, pos.y, pos.z],
+		"size": g.members.size(),
+	}, &"groups")
+
+
+## El nido del grupo pasa a huérfano: deja de ser suyo (`group_id = -1`, el grupo
+## queda nómada y puede volver a arraigar donde esté) y empieza a decaer desde ahora
+## (`orphaned_tick`, ver `get_nests`). `reason`: "abandoned" | "group_gone" | "merged".
+## `nest_lost` lleva el nombre en el payload: el grupo puede borrarse justo después.
+func _orphan_nest(g: Dictionary, reason: String) -> void:
+	var nid: int = int(g.get("nest_id", -1))
+	g.nest_id = -1
+	if not _nests.has(nid):
+		return
+	var nest: Dictionary = _nests[nid]
+	var now: int = SimulationClock.get_tick_count()
+	nest.group_id = -1
+	nest.orphaned_tick = now
+	EventLog.log_event(&"nest_lost", {
+		"nest_id": nid,
+		"group_id": int(g.get("id", -1)),
+		"name": g.get("name", ""),
+		"reason": reason,
+		"age_days": snappedf(float(now - int(nest.founded_tick)) / (GlobalParams.tuning.seconds_per_day
+			* SimulationClock.TICKS_PER_SECOND), 0.01),
+	}, &"groups")
+
+
+## Borra los nidos huérfanos que ya han decaído del todo (`decay_01 ≥ 1`, es decir,
+## `nest_decay_days` desde que quedaron huérfanos). Al ritmo de reevaluación, desde
+## `_on_tick`: un nido desaparece como mucho una reevaluación después de hundirse.
+func _fade_orphan_nests() -> void:
+	if _nests.is_empty():
+		return
+	var now: int = SimulationClock.get_tick_count()
+	var decay_ticks: float = maxf(1.0, GlobalParams.tuning.nest_decay_days
+		* GlobalParams.tuning.seconds_per_day * SimulationClock.TICKS_PER_SECOND)
+	for nid in _nests.keys():
+		var orphaned: int = int(_nests[nid].orphaned_tick)
+		if orphaned >= 0 and float(now - orphaned) >= decay_ticks:
+			_nests.erase(nid)
+			EventLog.log_event(&"nest_faded", {"nest_id": nid}, &"groups")
+
+
+# ---------------- GUARDADO ----------------
+# Ver `SaveGame` y el plan «Guardado y Carga de Escenarios». Las referencias a
+# entidades se guardan como índice de save (`ids`: instance_id → índice) y se
+# resuelven al cargar con `node_of` (índice → nodo). Los ids de grupo van tal cual.
+
+## Campos de cada grupo que referencian entidades: se remapean aparte.
+const _SAVE_REF_KEYS: Array[String] = ["members", "leader_id", "away_ticks", "forage_plant"]
+
+
+## Foto de `_next_group_id` y de cada grupo. Un miembro o una planta que no entró en
+## la foto (muerto, en cola de borrado) se descarta o queda en -1; `name` y `color`
+## se guardan (no se regeneran: el nombre sale de un RNG sin semilla).
+func to_save(ids: Dictionary) -> Dictionary:
+	var list: Array = []
+	for gid in _groups:
+		var g: Dictionary = _groups[gid]
+		var d: Dictionary = {}
+		for key in g:
+			if not String(key) in _SAVE_REF_KEYS:
+				var v: Variant = g[key]
+				d[key] = v.duplicate(true) if v is Dictionary or v is Array else v
+		var members: Array = []
+		for m in g.members:
+			var idx: int = _save_idx(m, ids)
+			if idx >= 0:
+				members.append(idx)
+		d["members"] = members
+		d["leader_id"] = int(ids.get(int(g.leader_id), -1))
+		var away: Dictionary = {}
+		for mid in g.away_ticks:
+			if ids.has(mid):
+				away[int(ids[mid])] = int(g.away_ticks[mid])
+		d["away_ticks"] = away
+		d["forage_plant"] = _save_idx(g.forage_plant, ids)
+		list.append(d)
+	# Nidos: sin referencias a entidades (posición y color van tal cual). Se excluye
+	# la caché volátil `cubs_in_radius` (se recalcula en la primera reevaluación).
+	var nests: Array = []
+	for nid in _nests:
+		var nest: Dictionary = _nests[nid].duplicate(true)
+		nest.erase("cubs_in_radius")
+		nests.append(nest)
+	return {"next_id": _next_group_id, "list": list, "nests": nests, "next_nest_id": _next_nest_id}
+
+
+## Reconstruye `_groups` DIRECTAMENTE desde `to_save`, sin `register_member`: ese
+## camino vuelca inventarios a la bolsa y loguea `group_formed` (efectos laterales que
+## falsearían el estado). Precondición: todas las entidades ya restauradas (`node_of`
+## completo y con su `group_id`). Recolorea a los miembros, que se activaron antes de
+## que su grupo existiera y tienen el color de genoma.
+func from_save(d: Dictionary, node_of: Array) -> void:
+	_groups.clear()
+	_nests.clear()
+	_clear_inter_aff_cache()
+	_next_group_id = int(d.get("next_id", 1))
+	# Una partida anterior a los nidos no trae estas claves: carga como mundo sin nidos.
+	_next_nest_id = int(d.get("next_nest_id", 1))
+	for sn in d.get("nests", []):
+		var nest: Dictionary = (sn as Dictionary).duplicate(true)
+		_nests[int(nest.id)] = nest
+	for sg in d.get("list", []):
+		var g: Dictionary = {}
+		for key in sg:
+			if not String(key) in _SAVE_REF_KEYS:
+				var v: Variant = sg[key]
+				g[key] = v.duplicate(true) if v is Dictionary or v is Array else v
+		var members: Array = []
+		for idx in sg.members:
+			var m: Node = _node_idx(node_of, int(idx))
+			if m != null:
+				members.append(m)
+		g["members"] = members
+		var leader: Node = _node_idx(node_of, int(sg.leader_id))
+		g["leader_id"] = leader.get_instance_id() if leader != null else 0
+		var away: Dictionary = {}
+		for idx in sg.away_ticks:
+			var m: Node = _node_idx(node_of, int(idx))
+			if m != null:
+				away[m.get_instance_id()] = int(sg.away_ticks[idx])
+		g["away_ticks"] = away
+		# Planta de forrajeo ya invalidada al guardar → -1 → null (`get_target_pos`
+		# lo trata como objetivo agotado y el grupo reevalúa).
+		g["forage_plant"] = _node_idx(node_of, int(sg.forage_plant))
+		g["nest_id"] = int(sg.get("nest_id", -1))
+		g["settle_ticks"] = int(sg.get("settle_ticks", 0))
+		# Sin la clave (partida anterior) se asume que sí: solo cuesta recorrer las plantas.
+		g["farmed"] = bool(sg.get("farmed", true))
+		_groups[int(g.id)] = g
+	for g in _groups.values():
+		for m in g.members:
+			m._refresh_group_tag()
+
+
+static func _save_idx(n: Variant, ids: Dictionary) -> int:
+	if not is_instance_valid(n):
+		return -1
+	return int(ids.get((n as Object).get_instance_id(), -1))
+
+
+static func _node_idx(node_of: Array, idx: int) -> Node:
+	if idx < 0 or idx >= node_of.size() or not is_instance_valid(node_of[idx]):
+		return null
+	return node_of[idx]
